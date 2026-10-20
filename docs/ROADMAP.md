@@ -77,11 +77,11 @@ This roadmap breaks down the progressive evolution of the platform into measurab
 
 ---
 
-## Phase 6: Multi-Format Reporting System
-- [ ] Implement report builder supporting HTML, PDF, and JSON (`reports/builder.py`).
-- [ ] Create executive summary and technical deep-dive templates.
-- [ ] Incorporate evidence links, severity distribution charts, and methodology sections.
-- [ ] Automated validation of generated report outputs (`tests/test_reports.py`).
+## Phase 6: Multi-Format Reporting System (Completed)
+- [x] Implement report builder supporting HTML, Markdown, and JSON (`reports/builder.py`).
+- [x] Create executive summary and technical deep-dive templates.
+- [x] Incorporate evidence links, severity distribution charts, and methodology sections.
+- [x] Automated validation of generated report outputs (`tests/test_reports.py`).
 
 ---
 

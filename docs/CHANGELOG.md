@@ -43,5 +43,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Raw JSON evidence vault archiving with SHA-256 cryptographic integrity hash.
   - Desktop `WebScanView` in `desktop/views/web_scan_view.py` with multi-tab results display (Discovered Routes, JS Secret Candidates, Response Headers), background worker thread, cancel capability, and real-time terminal streaming.
   - Integration into `MainWindow` navigation bar and project-switching signal pipeline.
+- **Professional Assessment Reporting System (Phase 6)**:
+  - Multi-format report builder in `reports/builder.py` aggregating Project metadata, Target Scopes, Tool Executions, Findings, and Evidence records.
+  - **HTML**: Self-contained, responsive, print-friendly (`@media print`) vulnerability report with executive summary cards, severity breakdown, CVSS tags, technical findings, and cryptographic evidence hashes.
+  - **Markdown**: Portable technical report following CPENT / PTES methodology, findings matrix, and evidence verification table.
+  - **JSON**: Machine-readable schema-compliant export for CI/CD and automated assessment ingestion.
+  - **Desktop Integration**: Export toolbar embedded in `desktop/views/findings_view.py` providing one-click export for HTML, Markdown, and JSON with file location confirmation.
 - **Comprehensive Test Suite**:
-  - 41 automated tests across all domain models, scope authorization, process runner, Nmap adapter/parser, curriculum, 30-day study plan, c0desec adapter, and PySide6 UI. All 41 tests passing.
+  - 52 automated tests across all domain models, scope authorization, process runner, Nmap adapter/parser, curriculum, 30-day study plan, c0desec adapter, report builder (HTML/MD/JSON), and PySide6 UI. All 52 tests passing.
