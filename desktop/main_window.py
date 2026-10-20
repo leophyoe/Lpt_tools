@@ -22,6 +22,7 @@ from desktop.views.cpent_labs_view import CPENTLabsView
 from desktop.views.findings_view import FindingsView
 from desktop.views.network_scan_view import NetworkScanView
 from desktop.views.projects_view import ProjectsView
+from desktop.views.tools_view import ToolsDashboardView
 from desktop.views.web_scan_view import WebScanView
 from desktop.widgets.terminal_view import TerminalWidget
 from storage.db import Database
@@ -72,12 +73,14 @@ class MainWindow(QMainWindow):
         self.btn_network = self._create_nav_btn("📡  Network Discovery", 1)
         self.btn_web = self._create_nav_btn("🌐  Web & API Security", 2)
         self.btn_findings = self._create_nav_btn("🛡️  Findings & Evidence", 3)
-        self.btn_cpent = self._create_nav_btn("🎓  CPENT Learning Labs", 4)
+        self.btn_tools = self._create_nav_btn("🛠️  Tool Integration", 4)
+        self.btn_cpent = self._create_nav_btn("🎓  CPENT Learning Labs", 5)
 
         side_layout.addWidget(self.btn_projects)
         side_layout.addWidget(self.btn_network)
         side_layout.addWidget(self.btn_web)
         side_layout.addWidget(self.btn_findings)
+        side_layout.addWidget(self.btn_tools)
         side_layout.addWidget(self.btn_cpent)
         side_layout.addStretch()
 
@@ -92,12 +95,14 @@ class MainWindow(QMainWindow):
         self.network_view = NetworkScanView(self.db)
         self.web_view = WebScanView(self.db)
         self.findings_view = FindingsView(self.db)
+        self.tools_view = ToolsDashboardView(self.db, self.registry)
         self.cpent_view = CPENTLabsView()
 
         self.view_stack.addWidget(self.projects_view)
         self.view_stack.addWidget(self.network_view)
         self.view_stack.addWidget(self.web_view)
         self.view_stack.addWidget(self.findings_view)
+        self.view_stack.addWidget(self.tools_view)
         self.view_stack.addWidget(self.cpent_view)
 
         content_splitter.addWidget(self.view_stack)
@@ -114,6 +119,7 @@ class MainWindow(QMainWindow):
 
         # Connect inter-view signals
         self.projects_view.project_selected.connect(self._on_project_selected)
+        self.tools_view.open_scanner_requested.connect(self._on_open_scanner_requested)
         self.btn_projects.setChecked(True)
 
     def _create_nav_btn(self, label: str, view_index: int) -> QPushButton:
@@ -144,3 +150,14 @@ class MainWindow(QMainWindow):
         self.web_view.set_active_project(project)
         self.findings_view.load_findings(project.id)
         self.terminal_widget.append_system_msg(f"Active project switched to: '{project.name}'")
+
+    def _on_open_scanner_requested(self, tool_name: str):
+        if tool_name == "nmap":
+            self.btn_network.setChecked(True)
+            self.view_stack.setCurrentIndex(1)
+        elif tool_name in ("c0desec", "sqlmap", "wafw00f", "gobuster"):
+            self.btn_web.setChecked(True)
+            self.view_stack.setCurrentIndex(2)
+        elif tool_name in ("volatility3", "bandit"):
+            self.btn_findings.setChecked(True)
+            self.view_stack.setCurrentIndex(3)

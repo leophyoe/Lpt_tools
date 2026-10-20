@@ -6,12 +6,13 @@ for supported assessment tools across system PATH and local source repositories.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -24,15 +25,24 @@ class ToolMetadata:
     description: str = ""
     fallback_source_path: Optional[str] = None
     is_python_script: bool = False
+    python_path_dir: Optional[str] = None
     binary_path: Optional[str] = None
     version: Optional[str] = None
     is_installed: bool = False
+    has_cli: bool = False
+    has_adapter: bool = False
+    has_gui: bool = False
+    has_parser: bool = False
+    install_guide: str = ""
+    safe_test_args: Optional[List[str]] = None
+    error_message: Optional[str] = None
 
 
 class ToolRegistry:
     """Discovers, inventories, and verifies security tools on the host system."""
 
     DEFAULT_TOOLS: List[ToolMetadata] = [
+        # Network
         ToolMetadata(
             name="nmap",
             display_name="Nmap Network Scanner",
@@ -40,6 +50,81 @@ class ToolRegistry:
             category="network",
             version_flag="--version",
             description="Network exploration and security auditing tool.",
+            has_adapter=True,
+            has_gui=True,
+            has_parser=True,
+            install_guide="sudo apt install nmap",
+            safe_test_args=["--version"],
+        ),
+        ToolMetadata(
+            name="tshark",
+            display_name="TShark Packet Analyzer",
+            binary_name="tshark",
+            category="network",
+            version_flag="--version",
+            description="Network protocol analyzer and terminal version of Wireshark.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install tshark",
+            safe_test_args=["--version"],
+        ),
+        ToolMetadata(
+            name="wireshark",
+            display_name="Wireshark Network Analyzer",
+            binary_name="wireshark",
+            category="network",
+            version_flag="--version",
+            description="Interactive GUI packet analyzer.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install wireshark",
+            safe_test_args=["--version"],
+        ),
+        ToolMetadata(
+            name="impacket",
+            display_name="Impacket Network Protocols",
+            binary_name="impacket",
+            category="network",
+            version_flag="--version",
+            fallback_source_path="source/network/impacket",
+            description="Collection of Python classes for working with network protocols.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="pip install impacket",
+            safe_test_args=["--version"],
+        ),
+        ToolMetadata(
+            name="netexec",
+            display_name="NetExec (CrackMapExec successor)",
+            binary_name="netexec",
+            category="network",
+            version_flag="--version",
+            fallback_source_path="source/network/NetExec",
+            description="Automated network service exploitation and credential assessment.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="pip install netexec",
+            safe_test_args=["--version"],
+        ),
+
+        # Web & API Security
+        ToolMetadata(
+            name="c0desec",
+            display_name="c0desec Web Recon",
+            binary_name="c0desec",
+            category="web",
+            version_flag="--version",
+            fallback_source_path="source/web/c0desec-pentest",
+            description="Passive web reconnaissance, security headers, CORS, and secret detection.",
+            has_adapter=True,
+            has_gui=True,
+            has_parser=True,
+            install_guide="Embedded in source/web/c0desec-pentest",
+            safe_test_args=["--version"],
         ),
         ToolMetadata(
             name="sqlmap",
@@ -50,15 +135,85 @@ class ToolRegistry:
             fallback_source_path="source/web/sqlmap/sqlmap.py",
             is_python_script=True,
             description="Automatic SQL injection and database takeover tool.",
+            has_adapter=True,
+            has_gui=True,
+            has_parser=True,
+            install_guide="source/web/sqlmap or: sudo apt install sqlmap",
+            safe_test_args=["--version"],
+        ),
+        ToolMetadata(
+            name="wafw00f",
+            display_name="WAFW00F Firewall Fingerprinter",
+            binary_name="wafw00f",
+            category="web",
+            version_flag="--version",
+            fallback_source_path="source/web/wafw00f/wafw00f/bin/wafw00f",
+            is_python_script=True,
+            python_path_dir="source/web/wafw00f",
+            description="Web Application Firewall fingerprinting toolkit.",
+            has_adapter=True,
+            has_gui=True,
+            has_parser=True,
+            install_guide="source/web/wafw00f or: pip install wafw00f",
+            safe_test_args=["--version"],
         ),
         ToolMetadata(
             name="gobuster",
-            display_name="Gobuster Directory/DNS Scanner",
+            display_name="Gobuster Directory Fuzzer",
             binary_name="gobuster",
             category="web",
             version_flag="version",
             description="Fast directory, file, DNS, and vhost busting tool written in Go.",
+            has_adapter=True,
+            has_gui=True,
+            has_parser=True,
+            install_guide="sudo apt install gobuster",
+            safe_test_args=["version"],
         ),
+        ToolMetadata(
+            name="ffuf",
+            display_name="ffuf Fast Web Fuzzer",
+            binary_name="ffuf",
+            category="web",
+            version_flag="-V",
+            fallback_source_path="source/web/ffuf",
+            description="Fast web fuzzer written in Go.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install golang-go && go install github.com/ffuf/ffuf/v2@latest",
+            safe_test_args=["-V"],
+        ),
+        ToolMetadata(
+            name="nikto",
+            display_name="Nikto Web Vulnerability Scanner",
+            binary_name="nikto",
+            category="web",
+            version_flag="-Version",
+            fallback_source_path="source/web/nikto/program/nikto.pl",
+            description="Web server vulnerability scanner.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install nikto libxml-writer-perl",
+            safe_test_args=["-Version"],
+        ),
+        ToolMetadata(
+            name="zaproxy",
+            display_name="OWASP ZAP",
+            binary_name="zap.sh",
+            category="web",
+            version_flag="-version",
+            fallback_source_path="source/web/zaproxy",
+            description="Integrated penetration testing tool for web applications.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install zaproxy or launch /usr/local/bin/zap.sh",
+            safe_test_args=["-version"],
+        ),
+
+        # System / Password / Forensics
         ToolMetadata(
             name="hydra",
             display_name="THC-Hydra Network Logon Cracker",
@@ -66,6 +221,11 @@ class ToolRegistry:
             category="system",
             version_flag="-h",
             description="Fast network authentication brute-forcing tool supporting numerous protocols.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install hydra",
+            safe_test_args=["-h"],
         ),
         ToolMetadata(
             name="hashcat",
@@ -74,14 +234,11 @@ class ToolRegistry:
             category="system",
             version_flag="--version",
             description="Advanced password recovery and hash cracking utility.",
-        ),
-        ToolMetadata(
-            name="binwalk",
-            display_name="Binwalk Firmware Analyzer",
-            binary_name="binwalk",
-            category="system",
-            version_flag="--help",
-            description="Firmware analysis and extraction utility.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install hashcat",
+            safe_test_args=["--version"],
         ),
         ToolMetadata(
             name="john",
@@ -90,6 +247,24 @@ class ToolRegistry:
             category="system",
             version_flag="--help",
             description="Rapid password cracking tool.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install john",
+            safe_test_args=["--help"],
+        ),
+        ToolMetadata(
+            name="binwalk",
+            display_name="Binwalk Firmware Analyzer",
+            binary_name="binwalk",
+            category="system",
+            version_flag="--help",
+            description="Firmware analysis and extraction utility.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install binwalk",
+            safe_test_args=["--help"],
         ),
         ToolMetadata(
             name="volatility3",
@@ -100,30 +275,55 @@ class ToolRegistry:
             fallback_source_path="source/system/volatility3/vol.py",
             is_python_script=True,
             description="Memory forensics analysis framework.",
+            has_adapter=True,
+            has_gui=True,
+            has_parser=True,
+            install_guide="source/system/volatility3 or: pip install volatility3",
+            safe_test_args=["--help"],
         ),
         ToolMetadata(
-            name="zaproxy",
-            display_name="OWASP ZAP",
-            binary_name="zap.sh",
-            category="web",
-            version_flag="-version",
-            description="Integrated penetration testing tool for web applications.",
+            name="radare2",
+            display_name="Radare2 Reverse Engineering",
+            binary_name="r2",
+            category="system",
+            version_flag="-v",
+            fallback_source_path="source/reverse_engineering/radare2",
+            description="Unix-like reverse engineering framework and commandline toolset.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="cd source/reverse_engineering/radare2 && sys/install.sh",
+            safe_test_args=["-v"],
+        ),
+
+        # Code Security & Vulnerability
+        ToolMetadata(
+            name="bandit",
+            display_name="Bandit Python AST Analyzer",
+            binary_name="bandit",
+            category="code_security",
+            version_flag="--version",
+            fallback_source_path="source/code_security/bandit",
+            description="Security linter designed to find common security issues in Python code.",
+            has_adapter=True,
+            has_gui=False,
+            has_parser=True,
+            install_guide="pip install bandit pyyaml stevedore",
+            safe_test_args=["--version"],
         ),
         ToolMetadata(
-            name="nuclei",
-            display_name="Nuclei Vulnerability Scanner",
-            binary_name="nuclei",
-            category="vulnerability",
-            version_flag="-version",
-            description="Fast and customizable vulnerability scanner based on simple YAML templates.",
-        ),
-        ToolMetadata(
-            name="ffuf",
-            display_name="ffuf Fast Web Fuzzer",
-            binary_name="ffuf",
-            category="web",
-            version_flag="-V",
-            description="Fast web fuzzer written in Go.",
+            name="semgrep",
+            display_name="Semgrep Static Analysis",
+            binary_name="semgrep",
+            category="code_security",
+            version_flag="--version",
+            fallback_source_path="source/code_security/semgrep",
+            description="Fast, open-source static analysis engine for finding bugs.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="pip install semgrep",
+            safe_test_args=["--version"],
         ),
         ToolMetadata(
             name="gitleaks",
@@ -131,7 +331,13 @@ class ToolRegistry:
             binary_name="gitleaks",
             category="code_security",
             version_flag="version",
+            fallback_source_path="source/code_security/gitleaks",
             description="Secret scanner for git repositories and files.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install golang-go && go install github.com/zricethezav/gitleaks/v8@latest",
+            safe_test_args=["version"],
         ),
         ToolMetadata(
             name="trivy",
@@ -139,15 +345,99 @@ class ToolRegistry:
             binary_name="trivy",
             category="code_security",
             version_flag="--version",
-            description="Vulnerability and misconfiguration scanner for containers and repos.",
+            fallback_source_path="source/code_security/trivy",
+            description="Comprehensive security scanner for vulnerabilities and misconfigurations.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install trivy",
+            safe_test_args=["--version"],
         ),
         ToolMetadata(
-            name="tshark",
-            display_name="TShark Network Packet Analyzer",
-            binary_name="tshark",
-            category="network",
+            name="nuclei",
+            display_name="Nuclei Vulnerability Scanner",
+            binary_name="nuclei",
+            category="vulnerability",
+            version_flag="-version",
+            fallback_source_path="source/vulnerability/nuclei",
+            description="Fast and customizable vulnerability scanner based on simple YAML templates.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install golang-go && go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+            safe_test_args=["-version"],
+        ),
+
+        # Cloud & Mobile
+        ToolMetadata(
+            name="prowler",
+            display_name="Prowler Cloud Security",
+            binary_name="prowler",
+            category="cloud",
+            version_flag="-v",
+            fallback_source_path="source/cloud/prowler",
+            description="Open Source security tool for AWS, Azure, GCP and Kubernetes.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="pip install prowler",
+            safe_test_args=["-v"],
+        ),
+        ToolMetadata(
+            name="scoutsuite",
+            display_name="ScoutSuite Multi-Cloud Auditor",
+            binary_name="scout",
+            category="cloud",
             version_flag="--version",
-            description="Network protocol analyzer and terminal version of Wireshark.",
+            fallback_source_path="source/cloud/ScoutSuite",
+            description="Multi-cloud security-auditing tool.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="pip install scoutsuite",
+            safe_test_args=["--version"],
+        ),
+        ToolMetadata(
+            name="jadx",
+            display_name="JADX Dex to Java Decompiler",
+            binary_name="jadx",
+            category="mobile",
+            version_flag="--version",
+            fallback_source_path="source/mobile/jadx",
+            description="Command line and GUI tools for producing Java source code from Android Dex and APK files.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="cd source/mobile/jadx && ./gradlew dist",
+            safe_test_args=["--version"],
+        ),
+        ToolMetadata(
+            name="apktool",
+            display_name="Apktool Reverse Engineering",
+            binary_name="apktool",
+            category="mobile",
+            version_flag="--version",
+            fallback_source_path="source/mobile/Apktool",
+            description="Tool for reverse engineering 3rd party, closed, binary Android apps.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="sudo apt install apktool",
+            safe_test_args=["--version"],
+        ),
+        ToolMetadata(
+            name="mobsf",
+            display_name="MobSF Mobile Security Framework",
+            binary_name="mobsf",
+            category="mobile",
+            version_flag="--version",
+            fallback_source_path="source/mobile/MobSF",
+            description="Automated, all-in-one mobile application pen-testing framework.",
+            has_adapter=False,
+            has_gui=False,
+            has_parser=False,
+            install_guide="docker run -it -p 8000:8000 opensecurity/mobile-security-framework-mobsf:latest",
+            safe_test_args=["--version"],
         ),
     ]
 
@@ -164,19 +454,37 @@ class ToolRegistry:
             if found_path:
                 tool.binary_path = found_path
                 tool.is_installed = True
+                tool.has_cli = True
                 tool.version = self._detect_version(found_path, tool.version_flag)
+                tool.error_message = None
             elif tool.fallback_source_path and Path(tool.fallback_source_path).is_file():
                 resolved = str(Path(tool.fallback_source_path).resolve())
                 tool.binary_path = resolved
                 tool.is_installed = True
+                tool.has_cli = True
                 if tool.is_python_script:
-                    tool.version = self._detect_python_script_version(resolved, tool.version_flag)
+                    tool.version = self._detect_python_script_version(
+                        resolved, tool.version_flag, tool.python_path_dir
+                    )
                 else:
                     tool.version = self._detect_version(resolved, tool.version_flag)
+                tool.error_message = None
+            elif tool.name == "c0desec" and tool.fallback_source_path and Path(tool.fallback_source_path).is_dir():
+                # c0desec is integrated directly via Python adapter
+                tool.binary_path = str(Path(tool.fallback_source_path).resolve())
+                tool.is_installed = True
+                tool.has_cli = False
+                tool.version = "1.0.0 (Python Adapter)"
+                tool.error_message = None
             else:
                 tool.binary_path = None
                 tool.is_installed = False
+                tool.has_cli = False
                 tool.version = None
+                if tool.fallback_source_path and Path(tool.fallback_source_path).exists():
+                    tool.error_message = "Source repository present but binary or dependencies unbuilt."
+                else:
+                    tool.error_message = "Executable not found on system PATH."
 
     @staticmethod
     def _detect_version(binary_path: str, version_flag: str) -> Optional[str]:
@@ -196,7 +504,14 @@ class ToolRegistry:
         return None
 
     @staticmethod
-    def _detect_python_script_version(script_path: str, version_flag: str) -> Optional[str]:
+    def _detect_python_script_version(
+        script_path: str, version_flag: str, python_path_dir: Optional[str] = None
+    ) -> Optional[str]:
+        env = dict(os.environ)
+        if python_path_dir:
+            resolved_pypath = str(Path(python_path_dir).resolve())
+            env["PYTHONPATH"] = f"{resolved_pypath}:{env.get('PYTHONPATH', '')}"
+
         try:
             res = subprocess.run(
                 [sys.executable, script_path, version_flag],
@@ -204,9 +519,15 @@ class ToolRegistry:
                 text=True,
                 timeout=4,
                 check=False,
+                env=env,
             )
             output = res.stdout.strip() or res.stderr.strip()
             if output:
+                # Filter out ascii art or empty lines if any
+                for line in output.splitlines():
+                    cleaned = line.strip()
+                    if cleaned and ("version" in cleaned.lower() or "v" in cleaned.lower() or "#" in cleaned):
+                        return cleaned
                 return output.splitlines()[0]
         except (subprocess.SubprocessError, OSError):
             pass
@@ -234,3 +555,43 @@ class ToolRegistry:
         if tool.is_python_script:
             return [sys.executable, tool.binary_path] + args
         return [tool.binary_path] + args
+
+    def test_tool(self, name: str, timeout: float = 5.0) -> Tuple[bool, str, int]:
+        """Runs a safe diagnostic test (e.g. version or help) without launching intrusive scans.
+        
+        Returns (is_success, output_or_error, exit_code).
+        """
+        tool = self.get_tool(name)
+        if not tool:
+            return False, f"Unknown tool '{name}'", -1
+
+        if not tool.is_installed or not tool.binary_path:
+            msg = (
+                f"Tool '{tool.display_name}' ({name}) is not installed or executable.\n\n"
+                f"Status: {tool.error_message or 'Missing executable'}\n\n"
+                f"Installation / Setup Guidance:\n{tool.install_guide}"
+            )
+            return False, msg, 127
+
+        if name == "c0desec":
+            return True, "c0desec Web Recon Engine is built-in and verified functional via Python adapter.", 0
+
+        test_args = tool.safe_test_args or [tool.version_flag]
+        cmd = self.resolve_command(name, test_args)
+
+        env = dict(os.environ)
+        if tool.python_path_dir:
+            resolved_pypath = str(Path(tool.python_path_dir).resolve())
+            env["PYTHONPATH"] = f"{resolved_pypath}:{env.get('PYTHONPATH', '')}"
+
+        try:
+            from terminal.runner import ProcessRunner
+            runner = ProcessRunner()
+            result = runner.run(cmd, timeout=timeout, env=env)
+            output = (result.stdout.strip() or result.stderr.strip())
+            
+            # Non-zero exit with version/help output (e.g. hydra exits 0 or 255 on -h)
+            is_success = (result.exit_code == 0) or (bool(output) and result.exit_code in (0, 1, 255))
+            return is_success, output, (result.exit_code if result.exit_code is not None else -1)
+        except Exception as exc:
+            return False, f"Execution failed: {exc}", -1

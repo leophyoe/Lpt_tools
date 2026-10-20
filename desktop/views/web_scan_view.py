@@ -32,6 +32,9 @@ from modules.web.c0desec_adapter import (
     WebScanResult,
     WebSecurityAdapter,
 )
+from modules.web.gobuster_adapter import GobusterAdapter, GobusterOptions
+from modules.web.sqlmap_adapter import SQLMapAdapter, SQLMapOptions
+from modules.web.wafw00f_adapter import WAFW00FAdapter, WAFW00FOptions
 from storage.db import Database
 from storage.models import Finding, FindingSeverity, Project, ToolExecution
 
@@ -48,6 +51,9 @@ class WebScanView(QWidget):
         super().__init__(parent)
         self.db = db
         self.adapter = WebSecurityAdapter(db)
+        self.wafw00f_adapter = WAFW00FAdapter(db)
+        self.sqlmap_adapter = SQLMapAdapter(db)
+        self.gobuster_adapter = GobusterAdapter(db)
         self.active_project: Optional[Project] = None
         self._current_findings: List[Finding] = []
 
@@ -99,22 +105,37 @@ class WebScanView(QWidget):
         form.addRow("Target Web URL *:", url_row)
 
         # Checkboxes for modules
-        check_bar = QHBoxLayout()
+        check_box = QVBoxLayout()
+        row1 = QHBoxLayout()
         self.cb_headers = QCheckBox("HTTP Security Headers")
         self.cb_headers.setChecked(True)
-        self.cb_cors = QCheckBox("CORS Misconfiguration")
+        self.cb_cors = QCheckBox("CORS Policy")
         self.cb_cors.setChecked(True)
         self.cb_secrets = QCheckBox("JS Secret Scanning")
         self.cb_secrets.setChecked(True)
         self.cb_endpoints = QCheckBox("Endpoint Discovery")
         self.cb_endpoints.setChecked(True)
+        row1.addWidget(self.cb_headers)
+        row1.addWidget(self.cb_cors)
+        row1.addWidget(self.cb_secrets)
+        row1.addWidget(self.cb_endpoints)
+        row1.addStretch()
 
-        check_bar.addWidget(self.cb_headers)
-        check_bar.addWidget(self.cb_cors)
-        check_bar.addWidget(self.cb_secrets)
-        check_bar.addWidget(self.cb_endpoints)
-        check_bar.addStretch()
-        form.addRow("Enabled Checks:", check_bar)
+        row2 = QHBoxLayout()
+        self.cb_waf = QCheckBox("WAF Fingerprint (WAFW00F)")
+        self.cb_waf.setChecked(True)
+        self.cb_sqlmap = QCheckBox("SQL Injection (SQLMap)")
+        self.cb_sqlmap.setChecked(False)
+        self.cb_gobuster = QCheckBox("Directory Fuzzing (Gobuster)")
+        self.cb_gobuster.setChecked(False)
+        row2.addWidget(self.cb_waf)
+        row2.addWidget(self.cb_sqlmap)
+        row2.addWidget(self.cb_gobuster)
+        row2.addStretch()
+
+        check_box.addLayout(row1)
+        check_box.addLayout(row2)
+        form.addRow("Security Modules:", check_box)
 
         # Execution Controls & Progress
         btn_bar = QHBoxLayout()
@@ -254,6 +275,21 @@ class WebScanView(QWidget):
             QMessageBox.warning(self, "Input Error", "Please specify a target URL.")
             return
 
+        # Active assessment confirmation guard
+        if self.cb_sqlmap.isChecked() or self.cb_gobuster.isChecked():
+            confirm = QMessageBox.question(
+                self,
+                "Confirm Active Security Assessment",
+                f"You have selected ACTIVE assessment tools (SQLMap / Gobuster) targeting:\n\n{target_url}\n\n"
+                "Active scans send fuzzing requests and test injection vectors.\n"
+                "Do you confirm that you have explicit, documented authorization to test this target?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                self.status_label.setText("Status: Active scan aborted by user.")
+                return
+
         options = WebScanOptions(
             target_url=target_url,
             check_headers=self.cb_headers.isChecked(),
@@ -272,22 +308,103 @@ class WebScanView(QWidget):
         self.status_label.setText(f"Status: Probing {target_url}...")
         self.status_label.setStyleSheet("color: #38bdf8;")
 
+        run_waf = self.cb_waf.isChecked()
+        run_sqlmap = self.cb_sqlmap.isChecked()
+        run_gobuster = self.cb_gobuster.isChecked()
+
         def worker():
             ev_dir = Path("storage/evidence")
-            success, msg, res, exec_rec = self.adapter.execute_scan(
-                project_id=self.active_project.id,
-                options=options,
-                scopes=scopes,
-                on_output=lambda chunk, stream: self.signals.output_received.emit(chunk, stream),
-                evidence_dir=ev_dir,
+            all_findings = []
+            all_endpoints = []
+            all_secrets = []
+            all_headers = {}
+            primary_exec = None
+
+            # 1. c0desec passive scan
+            if options.check_headers or options.check_cors or options.check_js_secrets or options.discover_endpoints:
+                success, msg, res, exec_rec = self.adapter.execute_scan(
+                    project_id=self.active_project.id,
+                    options=options,
+                    scopes=scopes,
+                    on_output=lambda chunk, stream: self.signals.output_received.emit(chunk, stream),
+                    evidence_dir=ev_dir,
+                )
+                primary_exec = exec_rec
+                if not success:
+                    self.signals.scan_completed.emit(False, msg, None, exec_rec)
+                    return
+                if res:
+                    all_findings.extend(res.findings)
+                    all_endpoints.extend(res.endpoints)
+                    all_secrets.extend(res.secrets)
+                    all_headers.update(res.headers)
+
+            # 2. WAFW00F fingerprinting
+            if run_waf:
+                self.signals.output_received.emit("\n[*] Launching WAFW00F Fingerprinting...\n", "stdout")
+                waf_opts = WAFW00FOptions(target_url=target_url)
+                w_ok, w_msg, w_findings, w_exec = self.wafw00f_adapter.execute_scan(
+                    project_id=self.active_project.id,
+                    options=waf_opts,
+                    scopes=scopes,
+                    on_output=lambda chunk, stream: self.signals.output_received.emit(chunk, stream),
+                    evidence_dir=ev_dir,
+                )
+                if w_exec and not primary_exec:
+                    primary_exec = w_exec
+                all_findings.extend(w_findings)
+
+            # 3. SQLMap injection check
+            if run_sqlmap:
+                self.signals.output_received.emit("\n[*] Launching SQLMap Injection Checks...\n", "stdout")
+                s_opts = SQLMapOptions(target_url=target_url)
+                s_ok, s_msg, s_findings, s_exec = self.sqlmap_adapter.execute_scan(
+                    project_id=self.active_project.id,
+                    options=s_opts,
+                    scopes=scopes,
+                    on_output=lambda chunk, stream: self.signals.output_received.emit(chunk, stream),
+                    evidence_dir=ev_dir,
+                )
+                if s_exec and not primary_exec:
+                    primary_exec = s_exec
+                all_findings.extend(s_findings)
+
+            # 4. Gobuster directory discovery
+            if run_gobuster:
+                self.signals.output_received.emit("\n[*] Launching Gobuster Directory Discovery...\n", "stdout")
+                g_opts = GobusterOptions(target_url=target_url)
+                g_ok, g_msg, g_findings, g_exec = self.gobuster_adapter.execute_scan(
+                    project_id=self.active_project.id,
+                    options=g_opts,
+                    scopes=scopes,
+                    on_output=lambda chunk, stream: self.signals.output_received.emit(chunk, stream),
+                    evidence_dir=ev_dir,
+                )
+                if g_exec and not primary_exec:
+                    primary_exec = g_exec
+                all_findings.extend(g_findings)
+                for f in g_findings:
+                    if f.affected_asset and f.affected_asset not in all_endpoints:
+                        all_endpoints.append(f.affected_asset)
+
+            composite_res = WebScanResult(
+                target_url=target_url,
+                findings=all_findings,
+                endpoints=all_endpoints,
+                secrets=all_secrets,
+                headers=all_headers,
+                response_status=200,
             )
-            self.signals.scan_completed.emit(success, msg, res, exec_rec)
+            self.signals.scan_completed.emit(True, "Assessment complete", composite_res, primary_exec)
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
 
     def _cancel_scan(self):
         self.adapter.cancel()
+        self.wafw00f_adapter.cancel()
+        self.sqlmap_adapter.cancel()
+        self.gobuster_adapter.cancel()
         self.status_label.setText("Status: Cancellation requested...")
         self.status_label.setStyleSheet("color: #fbbf24;")
         self.cancel_btn.setEnabled(False)

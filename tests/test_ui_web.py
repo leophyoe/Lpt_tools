@@ -151,3 +151,29 @@ def test_web_scan_view_populates_findings_and_details(qtbot, test_db):
     assert "Missing Content-Security-Policy" in details_content
     assert "CVSS: 4.3" in details_content
     assert "Absence of CSP reduces defense-in-depth" in details_content
+
+
+def test_web_scan_active_tools_require_confirmation(qtbot, test_db, monkeypatch):
+    project = test_db.create_project(Project(name="Active Guard Project"))
+    view = WebScanView(db=test_db)
+    qtbot.addWidget(view)
+    view.show()
+    view.set_active_project(project)
+    view.url_input.setText("http://127.0.0.1:8080")
+
+    # Enable active SQLMap check
+    view.cb_sqlmap.setChecked(True)
+
+    questions = []
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: (questions.append(args), QMessageBox.StandardButton.No)[1],
+    )
+
+    qtbot.mouseClick(view.scan_btn, Qt.MouseButton.LeftButton)
+    assert len(questions) == 1
+    assert "Active Security Assessment" in str(questions[0])
+    assert "Active scan aborted by user" in view.status_label.text()
+

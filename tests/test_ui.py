@@ -22,7 +22,7 @@ def test_main_window_initialization(qtbot, test_db):
 
     # Check window title and widgets
     assert "CyberSecuritySuite" in window.windowTitle()
-    assert window.view_stack.count() == 5
+    assert window.view_stack.count() == 6
     assert window.view_stack.currentIndex() == 0  # Projects view default
 
     # Verify status bar
@@ -47,9 +47,13 @@ def test_main_window_navigation(qtbot, test_db):
     qtbot.mouseClick(window.btn_findings, Qt.MouseButton.LeftButton)
     assert window.view_stack.currentIndex() == 3
 
+    # Click Tools Dashboard button
+    qtbot.mouseClick(window.btn_tools, Qt.MouseButton.LeftButton)
+    assert window.view_stack.currentIndex() == 4
+
     # Click CPENT Labs button
     qtbot.mouseClick(window.btn_cpent, Qt.MouseButton.LeftButton)
-    assert window.view_stack.currentIndex() == 4
+    assert window.view_stack.currentIndex() == 5
 
     # Click back to Projects
     qtbot.mouseClick(window.btn_projects, Qt.MouseButton.LeftButton)
