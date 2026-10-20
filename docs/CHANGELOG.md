@@ -24,5 +24,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Network discovery scan view (`desktop/views/network_scan_view.py`) with background execution thread and scope guard modal alerts.
   - Findings and Evidence triage view (`desktop/views/findings_view.py`) with severity badges and markdown remediation panel.
   - CPENT learning & practical labs roadmap view (`desktop/views/cpent_labs_view.py`).
+- **CPENT Learning Platform & Practical Methodologies (Phase 9)**:
+  - Structured CPENT test models in `labs/cpent/curriculum.py` covering OSINT, Social Engineering, and Network Pentesting.
+  - Complete 30-Day CPENT AI Study Plan in `labs/cpent/study_plan.py` spanning 4 weeks of structured theory, practical tasks, and tool recommendations.
+  - Interactive multi-tab CPENT Desktop View in `desktop/views/cpent_labs_view.py`:
+    - Tab 1: 🗓️ 30-Day Study Roadmap with daily tasks and progress tracking.
+    - Tab 2: 🛡️ Assessment Methodologies explorer with live search and markdown guidance.
+    - Tab 3: ⚡ Practical Command & One-Liner Cheat Sheet (Nmap, NetExec, Pivoting, Chisel, SMB, Metasploit).
+  - Reference materials collected in `labs/cpent/references/`: Vitaly Ford CPENT notes, CPENT-Crash-Course, CPENT-Learning, and CPENTv1StudyGuide.
+  - Integration of `c0desec-pentest` in `source/web/c0desec-pentest` for web/API security testing.
 - **Comprehensive Test Suite**:
-  - 30 automated tests across `test_environment`, `test_storage`, `test_scope`, `test_registry`, `test_runner`, `test_nmap_parser`, `test_nmap_adapter`, and `test_ui` (via `pytest-qt`). All 30 tests passing.
+  - 35 automated tests across all domain models, scope authorization, process runner, Nmap adapter/parser, curriculum, 30-day study plan, and PySide6 UI. All 35 tests passing.
