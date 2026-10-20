@@ -22,6 +22,7 @@ from desktop.views.cpent_labs_view import CPENTLabsView
 from desktop.views.findings_view import FindingsView
 from desktop.views.network_scan_view import NetworkScanView
 from desktop.views.projects_view import ProjectsView
+from desktop.views.web_scan_view import WebScanView
 from desktop.widgets.terminal_view import TerminalWidget
 from storage.db import Database
 from storage.models import Project
@@ -68,12 +69,14 @@ class MainWindow(QMainWindow):
         self.nav_group.setExclusive(True)
 
         self.btn_projects = self._create_nav_btn("📁  Projects & Scope", 0)
-        self.btn_network = self._create_nav_btn("🌐  Network Discovery", 1)
-        self.btn_findings = self._create_nav_btn("🛡️  Findings & Evidence", 2)
-        self.btn_cpent = self._create_nav_btn("🎓  CPENT Learning Labs", 3)
+        self.btn_network = self._create_nav_btn("📡  Network Discovery", 1)
+        self.btn_web = self._create_nav_btn("🌐  Web & API Security", 2)
+        self.btn_findings = self._create_nav_btn("🛡️  Findings & Evidence", 3)
+        self.btn_cpent = self._create_nav_btn("🎓  CPENT Learning Labs", 4)
 
         side_layout.addWidget(self.btn_projects)
         side_layout.addWidget(self.btn_network)
+        side_layout.addWidget(self.btn_web)
         side_layout.addWidget(self.btn_findings)
         side_layout.addWidget(self.btn_cpent)
         side_layout.addStretch()
@@ -87,11 +90,13 @@ class MainWindow(QMainWindow):
         self.view_stack = QStackedWidget()
         self.projects_view = ProjectsView(self.db)
         self.network_view = NetworkScanView(self.db)
+        self.web_view = WebScanView(self.db)
         self.findings_view = FindingsView(self.db)
         self.cpent_view = CPENTLabsView()
 
         self.view_stack.addWidget(self.projects_view)
         self.view_stack.addWidget(self.network_view)
+        self.view_stack.addWidget(self.web_view)
         self.view_stack.addWidget(self.findings_view)
         self.view_stack.addWidget(self.cpent_view)
 
@@ -136,5 +141,6 @@ class MainWindow(QMainWindow):
         self.active_project = project
         self.status_project_label.setText(f"Project: {project.name} (Client: {project.client_name or 'N/A'})")
         self.network_view.set_active_project(project)
+        self.web_view.set_active_project(project)
         self.findings_view.load_findings(project.id)
         self.terminal_widget.append_system_msg(f"Active project switched to: '{project.name}'")

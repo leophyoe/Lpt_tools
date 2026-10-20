@@ -299,3 +299,4 @@ CPENT_30_DAY_PLAN: List[StudyDay] = [
         recommended_tools=["All platform tools"],
     ),
 ]
+

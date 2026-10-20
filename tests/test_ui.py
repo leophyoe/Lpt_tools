@@ -22,7 +22,7 @@ def test_main_window_initialization(qtbot, test_db):
 
     # Check window title and widgets
     assert "CyberSecuritySuite" in window.windowTitle()
-    assert window.view_stack.count() == 4
+    assert window.view_stack.count() == 5
     assert window.view_stack.currentIndex() == 0  # Projects view default
 
     # Verify status bar
@@ -39,13 +39,17 @@ def test_main_window_navigation(qtbot, test_db):
     qtbot.mouseClick(window.btn_network, Qt.MouseButton.LeftButton)
     assert window.view_stack.currentIndex() == 1
 
+    # Click Web & API Security button
+    qtbot.mouseClick(window.btn_web, Qt.MouseButton.LeftButton)
+    assert window.view_stack.currentIndex() == 2
+
     # Click Findings button
     qtbot.mouseClick(window.btn_findings, Qt.MouseButton.LeftButton)
-    assert window.view_stack.currentIndex() == 2
+    assert window.view_stack.currentIndex() == 3
 
     # Click CPENT Labs button
     qtbot.mouseClick(window.btn_cpent, Qt.MouseButton.LeftButton)
-    assert window.view_stack.currentIndex() == 3
+    assert window.view_stack.currentIndex() == 4
 
     # Click back to Projects
     qtbot.mouseClick(window.btn_projects, Qt.MouseButton.LeftButton)
@@ -69,6 +73,8 @@ def test_project_selection_updates_views_and_terminal(qtbot, test_db):
     assert "Test Assessment Alpha" in window.status_project_label.text()
     assert window.network_view.active_project is not None
     assert window.network_view.active_project.name == "Test Assessment Alpha"
+    assert window.web_view.active_project is not None
+    assert window.web_view.active_project.name == "Test Assessment Alpha"
 
     # Verify message in terminal
     terminal_text = window.terminal_widget.text_edit.toPlainText()

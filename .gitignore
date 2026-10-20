@@ -59,6 +59,9 @@ secrets.json
 # Upstream cloned sources (we track our own code and wrappers, not raw third-party git checkouts)
 source/*/*
 !source/*/.gitkeep
+labs/cpent/references/*/
+labs/cpent/references/*/*
+!labs/cpent/references/*.md
 
 # Logs and runtime artifacts
 *.log

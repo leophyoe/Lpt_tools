@@ -34,3 +34,4 @@ def test_study_plan_contents():
     day30 = CPENT_30_DAY_PLAN[-1]
     assert day30.day == 30
     assert "Final Exam Readiness" in day30.title
+
