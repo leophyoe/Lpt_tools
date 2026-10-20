@@ -107,3 +107,90 @@ def test_vscode_terminal_pty_lifecycle(qtbot, tmp_path):
     assert term.process is None
     assert term.master_fd is None
 
+
+def test_terminal_save_session_as_evidence(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from reports.builder import ReportBuilder
+    from storage.db import Database
+    from storage.models import Project
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+
+    db = Database(str(tmp_path / "term_ev.db"))
+    proj = db.create_project(Project(name="Terminal Evidence Lab"))
+
+    terminal = TerminalWidget()
+    qtbot.addWidget(terminal)
+    terminal.show()
+
+    terminal.set_active_project(proj, db)
+    terminal._append_shell_text("PORT 22/tcp open ssh OpenSSH 8.2\nPORT 80/tcp open http nginx\n", "stdout")
+
+    # Save session as evidence
+    ev = terminal.save_session_as_evidence("shell")
+    assert ev is not None
+    assert ev.project_id == proj.id
+    assert ev.file_path != ""
+    assert ev.sha256_hash != ""
+    assert os.path.exists(ev.file_path)
+
+    # Verify it is recorded in database
+    ev_list = db.list_evidence(proj.id)
+    assert len(ev_list) == 1
+    assert ev_list[0].sha256_hash == ev.sha256_hash
+
+    # Verify it appears in generated report
+    builder = ReportBuilder(db)
+    md_report = builder.generate_markdown(proj.id)
+    assert ev.sha256_hash in md_report
+
+
+def test_terminal_ai_assistant_integration(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from storage.db import Database
+    from storage.models import Project, TargetScope
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+
+    db = Database(str(tmp_path / "ai_term.db"))
+    proj = db.create_project(Project(name="AI Terminal Test"))
+    db.add_scope(TargetScope(project_id=proj.id, target="127.0.0.1", is_authorized=True))
+
+    terminal = TerminalWidget()
+    qtbot.addWidget(terminal)
+    terminal.show()
+
+    terminal.set_active_project(proj, db)
+    assert hasattr(terminal, "ai_assistant")
+
+    # Set mock output in terminal
+    terminal.clear_shell()
+    terminal._append_shell_text("21/tcp open ftp vsftpd 2.0.8\n80/tcp open http Apache\n", "stdout")
+
+    # Test diagnosis
+    terminal.ai_assistant._diagnose_terminal_output()
+    diag_text = terminal.ai_assistant.txt_diagnosis.toPlainText()
+    assert "Technical Analysis" in diag_text
+
+    # Test AI command insertion
+    terminal.ai_assistant._on_provider_changed(0)
+    terminal.ai_assistant.cmd_prompt_input.setText("fast scan on 127.0.0.1")
+    terminal.ai_assistant._generate_command()
+    assert "nmap" in terminal.ai_assistant.lbl_cmd_preview.text()
+
+    # Apply command to terminal input
+    terminal.ai_assistant._insert_generated_command()
+    assert "nmap" in terminal.cmd_input.text()
+
+    # Test finding extraction and saving to DB
+    terminal.ai_assistant._extract_findings()
+    assert terminal.ai_assistant.findings_table.rowCount() == 2  # ftp and http
+
+    terminal.ai_assistant._save_findings_to_db()
+    findings = db.list_findings(proj.id)
+    assert len(findings) == 2
+    assert any("FTP" in f.title for f in findings)
+
+

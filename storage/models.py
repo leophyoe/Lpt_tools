@@ -113,10 +113,17 @@ class Finding:
 class Evidence:
     project_id: int
     file_path: str
-    sha256_hash: str
+    sha256_hash: str = ""
     id: Optional[int] = None
     finding_id: Optional[int] = None
     execution_id: Optional[int] = None
     description: str = ""
     mime_type: str = "text/plain"
+    file_hash: Optional[str] = None
     created_at: str = field(default_factory=_utc_now_iso)
+
+    def __post_init__(self):
+        if not self.sha256_hash and self.file_hash:
+            self.sha256_hash = self.file_hash
+        elif not self.file_hash and self.sha256_hash:
+            self.file_hash = self.sha256_hash

@@ -451,3 +451,4 @@ class ToolsDashboardView(QWidget):
     def _on_open_gui_clicked(self):
         if self.selected_tool and self.selected_tool.has_gui:
             self.open_scanner_requested.emit(self.selected_tool.name)
+

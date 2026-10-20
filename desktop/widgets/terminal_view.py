@@ -8,9 +8,11 @@ Provides:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QTabWidget,
@@ -28,6 +31,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from storage.db import Database
+from storage.models import Evidence, ExecutionStatus, Project, ToolExecution
 from terminal.runner import ProcessRunner
 
 
@@ -78,6 +83,8 @@ class TerminalWidget(QWidget):
         self.runner = ProcessRunner()
         self.cwd = os.getcwd()
         self._current_thread: Optional[threading.Thread] = None
+        self.active_project: Optional[Project] = None
+        self.db: Optional[Database] = None
 
         self.signals = ShellWorkerSignals()
         self.signals.output_received.connect(self._on_shell_output)
@@ -133,6 +140,12 @@ class TerminalWidget(QWidget):
         self.btn_copy_shell.setFixedHeight(22)
         self.btn_copy_shell.clicked.connect(self.copy_shell)
         shell_bar.addWidget(self.btn_copy_shell)
+
+        self.btn_save_shell_evidence = QPushButton("💾 Save to Evidence")
+        self.btn_save_shell_evidence.setFixedHeight(22)
+        self.btn_save_shell_evidence.setStyleSheet("background-color: #0369a1; color: #ffffff; font-weight: bold;")
+        self.btn_save_shell_evidence.clicked.connect(lambda: self.save_session_as_evidence("shell"))
+        shell_bar.addWidget(self.btn_save_shell_evidence)
 
         shell_layout.addLayout(shell_bar)
 
@@ -197,6 +210,12 @@ class TerminalWidget(QWidget):
         self.copy_btn.clicked.connect(self.copy_all)
         logs_bar.addWidget(self.copy_btn)
 
+        self.btn_save_log_evidence = QPushButton("💾 Save Logs to Evidence")
+        self.btn_save_log_evidence.setFixedHeight(22)
+        self.btn_save_log_evidence.setStyleSheet("background-color: #0369a1; color: #ffffff; font-weight: bold;")
+        self.btn_save_log_evidence.clicked.connect(lambda: self.save_session_as_evidence("logs"))
+        logs_bar.addWidget(self.btn_save_log_evidence)
+
         logs_layout.addLayout(logs_bar)
 
         self.log_text = QPlainTextEdit()
@@ -209,6 +228,15 @@ class TerminalWidget(QWidget):
         self.text_edit = self.log_text
 
         self.tabs.addTab(logs_widget, "📋 Tool & System Logs")
+
+        # -------------------------------------------------------------
+        # Tab 4: AI Copilot & Analyzer
+        # -------------------------------------------------------------
+        from desktop.widgets.terminal_ai_assistant import TerminalAIAssistantWidget
+        self.ai_assistant = TerminalAIAssistantWidget()
+        self.ai_assistant.terminal_get_output_cb = self.get_latest_output
+        self.ai_assistant.command_ready.connect(self._on_ai_command_ready)
+        self.tabs.addTab(self.ai_assistant, "🤖 AI Copilot & Analyzer")
 
         layout.addWidget(self.tabs)
 
@@ -385,6 +413,92 @@ class TerminalWidget(QWidget):
 
     def copy_shell(self):
         QApplication.clipboard().setText(self.shell_text.toPlainText())
+
+    def set_active_project(self, project: Optional[Project], db: Optional[Database] = None):
+        """Updates active project and database context for evidence saving and AI scope validation."""
+        self.active_project = project
+        self.db = db
+        if hasattr(self, "ai_assistant"):
+            self.ai_assistant.set_context(project, db)
+
+    def get_latest_output(self) -> str:
+        """Returns the most recent output from shell or logs for AI analysis."""
+        shell_out = self.shell_text.toPlainText().strip()
+        if shell_out:
+            return shell_out
+        return self.log_text.toPlainText().strip()
+
+    @Slot(str)
+    def _on_ai_command_ready(self, cmd: str):
+        """Inserts AI-generated or suggested command into the command line input."""
+        self.cmd_input.setText(cmd)
+        for i in range(self.tabs.count()):
+            if "Command Shell" in self.tabs.tabText(i):
+                self.tabs.setCurrentIndex(i)
+                break
+        self.cmd_input.setFocus()
+
+    def save_session_as_evidence(self, source: str = "shell") -> Optional[Evidence]:
+        """Saves current terminal session or logs as cryptographic project evidence for reports."""
+        if not self.active_project or not self.db:
+            QMessageBox.warning(
+                self,
+                "No Active Project",
+                "Please select an assessment project first in Projects & Scope to link this session as evidence.",
+            )
+            return None
+
+        content = self.shell_text.toPlainText().strip() if source == "shell" else self.log_text.toPlainText().strip()
+        if not content:
+            QMessageBox.warning(
+                self,
+                "Empty Output",
+                "No output recorded to save. Run commands or tools first.",
+            )
+            return None
+
+        ev_dir = Path("storage/evidence")
+        ev_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ev_file = ev_dir / f"terminal_{source}_{self.active_project.id}_{ts}.log"
+        ev_file.write_text(content, encoding="utf-8")
+        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+        # Record ToolExecution in database
+        tool_exec = ToolExecution(
+            project_id=self.active_project.id,
+            tool_name=f"terminal_{source}",
+            command=f"Interactive Terminal {source.title()} Session Record",
+            status=ExecutionStatus.COMPLETED,
+            exit_code=0,
+            raw_output_path=str(ev_file),
+        )
+        saved_exec = self.db.create_execution(tool_exec)
+
+        # Record Evidence in database
+        ev = Evidence(
+            project_id=self.active_project.id,
+            execution_id=saved_exec.id,
+            file_path=str(ev_file),
+            sha256_hash=sha256,
+            description=f"Terminal {source} session recorded at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            mime_type="text/plain",
+        )
+        saved_evidence = self.db.add_evidence(ev)
+
+        self.append_system_msg(
+            f"💾 Terminal {source} session saved as Evidence #{saved_evidence.id} (SHA-256: {sha256[:12]}...). Included in report."
+        )
+
+        QMessageBox.information(
+            self,
+            "Evidence Saved",
+            f"Terminal session successfully saved as Project Evidence #{saved_evidence.id}!\n\n"
+            f"File: {ev_file.name}\n"
+            f"SHA-256 Hash: {sha256}\n\n"
+            "This session record is now permanently linked to the project and will appear in generated reports.",
+        )
+        return saved_evidence
 
     def copy_all(self):
         QApplication.clipboard().setText(self.log_text.toPlainText())

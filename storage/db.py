@@ -415,3 +415,8 @@ class Database:
                 )
                 for row in rows
             ]
+
+    # Backward compatibility aliases
+    create_evidence = add_evidence
+    create_target_scope = add_scope
+    create_tool_execution = create_execution

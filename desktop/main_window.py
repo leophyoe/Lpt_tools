@@ -149,6 +149,7 @@ class MainWindow(QMainWindow):
         self.network_view.set_active_project(project)
         self.web_view.set_active_project(project)
         self.findings_view.load_findings(project.id)
+        self.terminal_widget.set_active_project(project, self.db)
         self.terminal_widget.append_system_msg(f"Active project switched to: '{project.name}'")
 
     def _on_open_scanner_requested(self, tool_name: str):

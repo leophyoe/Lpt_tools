@@ -182,3 +182,4 @@ class BanditAdapter:
         # Bandit exits with 0 on no findings, or 1 on findings detected
         is_success = proc_result.status == ExecutionStatus.COMPLETED and proc_result.exit_code in (0, 1)
         return is_success, f"Scan finished ({len(findings)} issues identified)", findings, saved_exec
+

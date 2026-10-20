@@ -110,3 +110,4 @@ def test_tools_dashboard_open_gui_signal(qtbot, db):
         view.btn_open_gui.click()
 
     assert blocker.args == ["nmap"]
+
