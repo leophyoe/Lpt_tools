@@ -27,10 +27,15 @@ from PySide6.QtWebSockets import QWebSocket, QWebSocketServer
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
+
+from storage.db import Database
+from storage.models import Project
+from terminal.recorder import TerminalSessionRecorder
 
 
 class PTYSignals(QObject):
@@ -53,6 +58,10 @@ class VSCodeTerminal(QWidget):
         self.server: Optional[QWebSocketServer] = None
         self.signals = PTYSignals()
         self.signals.data_received.connect(self._on_pty_data)
+
+        self.active_project: Optional[Project] = None
+        self.db: Optional[Database] = None
+        self.recorder = TerminalSessionRecorder()
 
         self._init_server()
         self._init_pty()
@@ -120,7 +129,23 @@ class VSCodeTerminal(QWidget):
         status = QLabel("● Live Bash Session")
         status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 500;")
         header.addWidget(status)
+
+        self.lbl_record_status = QLabel("⚪ Recording: Disabled (No Project)")
+        self.lbl_record_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        header.addWidget(self.lbl_record_status)
+
         header.addStretch()
+
+        self.btn_toggle_record = QPushButton("🔴 Start Recording")
+        self.btn_toggle_record.setFixedHeight(22)
+        self.btn_toggle_record.clicked.connect(self.toggle_recording)
+        header.addWidget(self.btn_toggle_record)
+
+        self.btn_save_evidence = QPushButton("💾 Save Evidence")
+        self.btn_save_evidence.setFixedHeight(22)
+        self.btn_save_evidence.setStyleSheet("background-color: #0369a1; color: #ffffff; font-weight: bold;")
+        self.btn_save_evidence.clicked.connect(self.save_session_evidence)
+        header.addWidget(self.btn_save_evidence)
 
         self.btn_restart = QPushButton("Restart Shell")
         self.btn_restart.setFixedHeight(22)
@@ -162,6 +187,8 @@ class VSCodeTerminal(QWidget):
 
             if msg_type == "input":
                 data = payload.get("data", "")
+                if self.recorder.is_recording:
+                    self.recorder.record_input(data)
                 os.write(self.master_fd, data.encode("utf-8"))
             elif msg_type == "resize":
                 cols = int(payload.get("cols", 80))
@@ -179,8 +206,79 @@ class VSCodeTerminal(QWidget):
     @Slot(str)
     def _on_pty_data(self, text: str):
         """Sends data read from Linux PTY to the xterm.js client."""
+        if self.recorder.is_recording:
+            self.recorder.record_output(text)
+            self.lbl_record_status.setText(f"🔴 Recording: Active ({len(self.recorder.events)} events)")
+
         if self.client_socket and self.client_socket.isValid():
             self.client_socket.sendTextMessage(text)
+
+    def set_context(self, project: Optional[Project], db: Optional[Database]):
+        """Sets active project and database context for session evidence recording."""
+        self.active_project = project
+        self.db = db
+        if project:
+            if not self.recorder.is_recording:
+                self.lbl_record_status.setText("⚪ Recording: Off")
+                self.lbl_record_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        else:
+            self.lbl_record_status.setText("⚪ Recording: Disabled (No Project)")
+            self.lbl_record_status.setStyleSheet("color: #64748b; font-size: 11px;")
+
+    @Slot()
+    def toggle_recording(self):
+        """Toggles session recording on or off."""
+        if not self.active_project:
+            QMessageBox.warning(
+                self,
+                "No Active Project",
+                "Please select an assessment project in Projects & Scope before recording a terminal session.",
+            )
+            return
+
+        if not self.recorder.is_recording:
+            self.recorder.start(project_id=self.active_project.id, cwd=self.cwd)
+            self.btn_toggle_record.setText("⏹️ Stop Recording")
+            self.lbl_record_status.setText("🔴 Recording: Active (0 events)")
+            self.lbl_record_status.setStyleSheet("color: #ef4444; font-size: 11px; font-weight: bold;")
+        else:
+            self.recorder.stop(exit_status=0)
+            self.btn_toggle_record.setText("🔴 Start Recording")
+            self.lbl_record_status.setText(f"⚪ Recording: Stopped ({len(self.recorder.events)} events)")
+            self.lbl_record_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
+
+    @Slot()
+    def save_session_evidence(self):
+        """Saves current PTY recording as project evidence."""
+        if not self.active_project or not self.db:
+            QMessageBox.warning(
+                self,
+                "No Active Project",
+                "Please select an assessment project first in Projects & Scope.",
+            )
+            return
+
+        if not self.recorder.events and not self.recorder.get_raw_content().strip():
+            QMessageBox.warning(
+                self,
+                "Empty Session",
+                "No terminal session activity recorded yet. Start recording and execute commands first.",
+            )
+            return
+
+        try:
+            res = self.recorder.save_session_as_evidence(db=self.db, project_id=self.active_project.id)
+            dup_msg = "\n(Existing duplicate session record verified)" if res.is_duplicate else ""
+            QMessageBox.information(
+                self,
+                "Evidence Saved",
+                f"Interactive PTY Terminal session successfully recorded as Evidence #{res.evidence.id}!\n\n"
+                f"Session ID: {res.session_record.session_id}\n"
+                f"Cryptographic SHA-256 Hash:\n{res.sha256_hash}\n\n"
+                f"Files Vaulted:\n- Raw ANSI: {Path(res.raw_path).name}\n- Plain Text: {Path(res.plain_path).name}{dup_msg}",
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save terminal session evidence: {e}")
 
     def stop_pty(self):
         """Stops the underlying PTY process and closes master file descriptor."""

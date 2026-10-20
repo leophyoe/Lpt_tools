@@ -8,6 +8,7 @@ severity distributions, technical findings, and cryptographic evidence hashes.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -21,8 +22,10 @@ from storage.models import (
     FindingSeverity,
     Project,
     TargetScope,
+    TerminalSessionRecord,
     ToolExecution,
 )
+from terminal.recorder import redact_sensitive_text
 
 
 class ReportFormat(str, Enum):
@@ -58,6 +61,7 @@ class AssessmentReportData:
     findings: List[Finding]
     evidence: List[Evidence]
     metrics: ReportSummaryMetrics
+    terminal_sessions: List[TerminalSessionRecord] = field(default_factory=list)
     generated_at: str = field(default_factory=_utc_now_iso)
 
 
@@ -77,6 +81,7 @@ class ReportBuilder:
         executions = self.db.list_executions(project_id)
         findings = self.db.list_findings(project_id)
         evidence = self.db.list_evidence(project_id)
+        terminal_sessions = self.db.list_terminal_sessions(project_id)
 
         # Compute summary metrics
         metrics = ReportSummaryMetrics(
@@ -111,6 +116,7 @@ class ReportBuilder:
             findings=findings,
             evidence=evidence,
             metrics=metrics,
+            terminal_sessions=terminal_sessions,
         )
 
     # -------------------------------------------------------------
@@ -187,6 +193,32 @@ class ReportBuilder:
                     "created_at": ev.created_at,
                 }
                 for ev in data.evidence
+            ],
+            "terminal_sessions": [
+                {
+                    "session_id": s.session_id,
+                    "started_at": s.started_at,
+                    "ended_at": s.ended_at,
+                    "working_directory": s.working_directory,
+                    "exit_status": s.exit_status,
+                    "sha256_hash": s.sha256_hash,
+                    "raw_output_path": s.raw_output_path,
+                    "plain_text_path": s.plain_text_path,
+                    "evidence_id": s.evidence_id,
+                    "execution_id": s.execution_id,
+                    "command_count": s.command_count,
+                    "commands": [
+                        {
+                            "command": redact_sensitive_text(c.get("command", "")),
+                            "working_directory": c.get("working_directory", ""),
+                            "exit_code": c.get("exit_code"),
+                            "timestamp": c.get("timestamp"),
+                            "duration_seconds": c.get("duration_seconds"),
+                        }
+                        for c in (json.loads(s.commands_json) if s.commands_json else [])
+                    ],
+                }
+                for s in data.terminal_sessions
             ],
         }
 
@@ -340,11 +372,70 @@ class ReportBuilder:
         else:
             lines.append("| - | *No evidence files registered* | - | - | - |")
 
+        disclaimer_section_num = 7
+        if data.terminal_sessions:
+            disclaimer_section_num = 8
+            lines.extend([
+                "",
+                "---",
+                "",
+                "## 7. Interactive Terminal Sessions & Command Audit Trail",
+                "",
+                "Recorded interactive terminal sessions linked to this assessment engagement:",
+                "",
+                "| Session ID | Recorded Time Range | Working Directory | Exit Status | SHA-256 Hash | Commands |",
+                "| :--- | :--- | :--- | :---: | :--- | :---: |",
+            ])
+            for s in data.terminal_sessions:
+                time_range = f"{s.started_at[:19]} to {s.ended_at[:19] if s.ended_at else 'Incomplete'}"
+                hash_short = f"`{s.sha256_hash[:16]}...`" if s.sha256_hash else "-"
+                exit_str = str(s.exit_status) if s.exit_status is not None else "0"
+                lines.append(
+                    f"| `{s.session_id}` | {time_range} | `{s.working_directory}` | {exit_str} | {hash_short} | {s.command_count} |"
+                )
+
+            for s in data.terminal_sessions:
+                lines.extend([
+                    "",
+                    f"### Session `{s.session_id}`",
+                    f"- **Recorded:** {s.started_at} to {s.ended_at or 'Incomplete'}",
+                    f"- **Working Directory:** `{s.working_directory}`",
+                    f"- **Cryptographic SHA-256:** `{s.sha256_hash}`",
+                ])
+                if s.commands_json:
+                    try:
+                        cmds = json.loads(s.commands_json)
+                        if cmds:
+                            lines.append("- **Recorded Commands (Redacted):**")
+                            for c in cmds:
+                                cmd_red = redact_sensitive_text(c.get("command", ""))
+                                exit_code = c.get("exit_code")
+                                exit_lbl = f"(exit: {exit_code})" if exit_code is not None else ""
+                                lines.append(f"  - `{cmd_red}` {exit_lbl}")
+                    except Exception:
+                        pass
+
+                if s.plain_text_path and os.path.exists(s.plain_text_path):
+                    try:
+                        content = Path(s.plain_text_path).read_text(encoding="utf-8", errors="replace").strip()
+                        if content:
+                            snippet = "\n".join(content.splitlines()[:15])
+                            redacted_snippet = redact_sensitive_text(snippet)
+                            lines.extend([
+                                "",
+                                "**Session Output Preview (Redacted):**",
+                                "```text",
+                                redacted_snippet,
+                                "```",
+                            ])
+                    except Exception:
+                        pass
+
         lines.extend([
             "",
             "---",
             "",
-            "## 7. Disclaimer & Rules of Engagement",
+            f"## {disclaimer_section_num}. Disclaimer & Rules of Engagement",
             "",
             "This report contains sensitive security intelligence intended solely for the authorized client organization.",
             "Testing was executed in compliance with agreed Rules of Engagement. Antigravity / CyberSecuritySuite makes",
@@ -457,6 +548,83 @@ class ReportBuilder:
               <td><code class="hash-code">{ev.sha256_hash}</code></td>
               <td>{ev.description}</td>
             </tr>"""
+
+        # Build Terminal Sessions HTML
+        terminal_sessions_html = ""
+        if data.terminal_sessions:
+            terminal_sessions_html = """
+    <!-- Interactive Terminal Sessions Section -->
+    <h2 class="section-title">🖥️ Interactive Terminal Sessions & Command Audit Trail</h2>
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Session ID</th>
+            <th>Recorded Time Range</th>
+            <th>Working Directory</th>
+            <th>Exit</th>
+            <th>Cryptographic Hash (SHA-256)</th>
+            <th>Commands</th>
+          </tr>
+        </thead>
+        <tbody>
+        """
+            for s in data.terminal_sessions:
+                time_range = f"{s.started_at[:19]} to {s.ended_at[:19] if s.ended_at else 'Incomplete'}"
+                terminal_sessions_html += f"""
+          <tr>
+            <td><code>{s.session_id}</code></td>
+            <td>{time_range}</td>
+            <td><code>{s.working_directory}</code></td>
+            <td><span class="badge {'badge-low' if s.exit_status == 0 else 'badge-critical'}">{s.exit_status if s.exit_status is not None else 0}</span></td>
+            <td><code class="hash-code">{s.sha256_hash}</code></td>
+            <td><strong>{s.command_count}</strong></td>
+          </tr>
+            """
+            terminal_sessions_html += """
+        </tbody>
+      </table>
+    </div>
+        """
+            for s in data.terminal_sessions:
+                cmds_html = ""
+                if s.commands_json:
+                    try:
+                        cmds = json.loads(s.commands_json)
+                        if cmds:
+                            cmds_html = "<div class='card-section'><h4>Recorded Commands (Redacted)</h4><ul>"
+                            for c in cmds:
+                                cmd_red = redact_sensitive_text(c.get("command", ""))
+                                exit_lbl = f" <span class='badge badge-info'>exit {c.get('exit_code')}</span>" if c.get("exit_code") is not None else ""
+                                cmds_html += f"<li><code>{cmd_red}</code>{exit_lbl}</li>"
+                            cmds_html += "</ul></div>"
+                    except Exception:
+                        pass
+
+                preview_html = ""
+                if s.plain_text_path and os.path.exists(s.plain_text_path):
+                    try:
+                        content = Path(s.plain_text_path).read_text(encoding="utf-8", errors="replace").strip()
+                        if content:
+                            snippet = "\n".join(content.splitlines()[:15])
+                            red_snip = redact_sensitive_text(snippet)
+                            preview_html = f"<div class='card-section'><h4>Output Preview (Redacted)</h4><pre class='code-block'><code>{red_snip}</code></pre></div>"
+                    except Exception:
+                        pass
+
+                terminal_sessions_html += f"""
+            <div class="finding-card" style="border-left: 4px solid var(--accent-blue); margin-bottom: 16px;">
+              <div class="finding-header">
+                <span class="finding-title">Terminal Session <code>{s.session_id}</code></span>
+                <span class="badge badge-info">SHA-256 Verified</span>
+              </div>
+              <div class="card-section">
+                <p><strong>Time:</strong> {s.started_at} to {s.ended_at or 'Incomplete'} | <strong>Directory:</strong> <code>{s.working_directory}</code></p>
+                <p><strong>Evidence Hash:</strong> <code class="hash-code">{s.sha256_hash}</code></p>
+              </div>
+              {cmds_html}
+              {preview_html}
+            </div>"""
 
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -904,6 +1072,8 @@ class ReportBuilder:
         </tbody>
       </table>
     </div>
+
+    {terminal_sessions_html}
 
     <!-- Footer -->
     <footer class="report-footer">

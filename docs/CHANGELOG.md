@@ -49,5 +49,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - **Markdown**: Portable technical report following CPENT / PTES methodology, findings matrix, and evidence verification table.
   - **JSON**: Machine-readable schema-compliant export for CI/CD and automated assessment ingestion.
   - **Desktop Integration**: Export toolbar embedded in `desktop/views/findings_view.py` providing one-click export for HTML, Markdown, and JSON with file location confirmation.
+- **Tool Integration Dashboard & Execution Verification (Phase 7)**:
+  - Interactive Tools Dashboard in `desktop/views/tools_view.py` categorizing open-source security tools (Nmap, SQLMap, c0desec, WAFW00F, Gobuster, Bandit, Volatility 3).
+  - Real executable resolution, version verification, adapter discovery, and safe local testing capability.
+- **Terminal Session Evidence & Report Integration (Phase 8)**:
+  - `TerminalSessionRecorder` in `terminal/recorder.py` capturing separate input and output event streams with timestamped JSON logs.
+  - PTY session recording integrated into `VSCodeTerminal` (`desktop/widgets/vscode_terminal.py`) with Start/Stop Recording and Save Session as Evidence controls.
+  - Command Shell recording integrated into `TerminalWidget` (`desktop/widgets/terminal_view.py`) with reliable command boundary and exit code tracking.
+  - Dedicated `TerminalSessionHistoryWidget` and `SessionViewerDialog` in `desktop/widgets/terminal_session_history.py` (Tab 5) displaying vaulted sessions with clean plain-text, redacted report preview, raw ANSI stream, and structured JSON events.
+  - Cryptographic SHA-256 hash calculation over exact saved evidence bytes and deduplication to prevent duplicate database rows.
+  - Secret and credential redaction (`redact_sensitive_text`) masking CLI passwords, auth tokens, AWS credentials, and private keys for reports while preserving unaltered byte-exact raw evidence.
+  - Extended HTML, Markdown, and JSON report generation in `reports/builder.py` incorporating interactive terminal audit trails.
 - **Comprehensive Test Suite**:
-  - 52 automated tests across all domain models, scope authorization, process runner, Nmap adapter/parser, curriculum, 30-day study plan, c0desec adapter, report builder (HTML/MD/JSON), and PySide6 UI. All 52 tests passing.
+  - 100 automated unit, integration, and UI tests across all modules, models, adapters, PTY lifecycle, recording, evidence integrity, reports, and AI assistant. 100% passing (100/100).

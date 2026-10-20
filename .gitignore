@@ -46,6 +46,8 @@ htmlcov/
 *.db
 *.sqlite3
 storage/data/
+storage/evidence/*
+!storage/evidence/.gitkeep
 reports/output/*
 !reports/output/.gitkeep
 

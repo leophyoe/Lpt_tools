@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from storage.db import Database
 from storage.models import Evidence, ExecutionStatus, Project, ToolExecution
+from terminal.recorder import TerminalSessionRecorder
 from terminal.runner import ProcessRunner
 
 
@@ -85,6 +86,8 @@ class TerminalWidget(QWidget):
         self._current_thread: Optional[threading.Thread] = None
         self.active_project: Optional[Project] = None
         self.db: Optional[Database] = None
+        self.shell_recorder = TerminalSessionRecorder()
+        self._last_cmd: str = ""
 
         self.signals = ShellWorkerSignals()
         self.signals.output_received.connect(self._on_shell_output)
@@ -140,6 +143,15 @@ class TerminalWidget(QWidget):
         self.btn_copy_shell.setFixedHeight(22)
         self.btn_copy_shell.clicked.connect(self.copy_shell)
         shell_bar.addWidget(self.btn_copy_shell)
+
+        self.lbl_shell_rec_status = QLabel("⚪ Rec: Off")
+        self.lbl_shell_rec_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        shell_bar.addWidget(self.lbl_shell_rec_status)
+
+        self.btn_toggle_shell_rec = QPushButton("🔴 Start Recording")
+        self.btn_toggle_shell_rec.setFixedHeight(22)
+        self.btn_toggle_shell_rec.clicked.connect(self.toggle_shell_recording)
+        shell_bar.addWidget(self.btn_toggle_shell_rec)
 
         self.btn_save_shell_evidence = QPushButton("💾 Save to Evidence")
         self.btn_save_shell_evidence.setFixedHeight(22)
@@ -238,6 +250,13 @@ class TerminalWidget(QWidget):
         self.ai_assistant.command_ready.connect(self._on_ai_command_ready)
         self.tabs.addTab(self.ai_assistant, "🤖 AI Copilot & Analyzer")
 
+        # -------------------------------------------------------------
+        # Tab 5: Sessions & Cryptographic Evidence Vault
+        # -------------------------------------------------------------
+        from desktop.widgets.terminal_session_history import TerminalSessionHistoryWidget
+        self.session_vault = TerminalSessionHistoryWidget()
+        self.tabs.addTab(self.session_vault, "📜 Sessions & Evidence Vault")
+
         layout.addWidget(self.tabs)
 
         # Display initial shell banner
@@ -295,6 +314,10 @@ class TerminalWidget(QWidget):
             return
 
         self._append_shell_text(f"$ {raw_cmd}\n", "prompt")
+        self._last_cmd = raw_cmd
+        if self.shell_recorder.is_recording:
+            self.shell_recorder.record_input(f"$ {raw_cmd}\n")
+
         self.btn_run.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.shell_status_label.setText("Shell: Running...")
@@ -328,10 +351,21 @@ class TerminalWidget(QWidget):
 
     @Slot(str, str)
     def _on_shell_output(self, chunk: str, stream: str):
+        if self.shell_recorder.is_recording:
+            self.shell_recorder.record_output(chunk)
         self._append_shell_text(chunk, stream)
 
     @Slot(int, float)
     def _on_shell_finished(self, exit_code: int, duration: float):
+        if self.shell_recorder.is_recording:
+            self.shell_recorder.record_command(
+                self._last_cmd,
+                exit_code=exit_code,
+                cwd=self.cwd,
+                duration=duration,
+            )
+            self.lbl_shell_rec_status.setText(f"🔴 Rec: Active ({len(self.shell_recorder.events)} events)")
+
         self.btn_run.setEnabled(True)
         self.btn_stop.setEnabled(False)
 
@@ -418,8 +452,42 @@ class TerminalWidget(QWidget):
         """Updates active project and database context for evidence saving and AI scope validation."""
         self.active_project = project
         self.db = db
+        if project:
+            self.shell_recorder.project_id = project.id
+            if not self.shell_recorder.is_recording:
+                self.lbl_shell_rec_status.setText("⚪ Rec: Off")
+        else:
+            self.shell_recorder.project_id = None
+            self.lbl_shell_rec_status.setText("⚪ Rec: Disabled (No Project)")
+
         if hasattr(self, "ai_assistant"):
             self.ai_assistant.set_context(project, db)
+        if hasattr(self, "session_vault"):
+            self.session_vault.set_context(project, db)
+        if self.vscode_term and hasattr(self.vscode_term, "set_context"):
+            self.vscode_term.set_context(project, db)
+
+    @Slot()
+    def toggle_shell_recording(self):
+        """Toggles Command Shell session recording on or off."""
+        if not self.active_project:
+            QMessageBox.warning(
+                self,
+                "No Active Project",
+                "Please select an assessment project in Projects & Scope before recording terminal sessions.",
+            )
+            return
+
+        if not self.shell_recorder.is_recording:
+            self.shell_recorder.start(project_id=self.active_project.id, cwd=self.cwd)
+            self.btn_toggle_shell_rec.setText("⏹️ Stop Recording")
+            self.lbl_shell_rec_status.setText("🔴 Rec: Active (0 events)")
+            self.lbl_shell_rec_status.setStyleSheet("color: #ef4444; font-size: 11px; font-weight: bold;")
+        else:
+            self.shell_recorder.stop(exit_status=0)
+            self.btn_toggle_shell_rec.setText("🔴 Start Recording")
+            self.lbl_shell_rec_status.setText(f"⚪ Rec: Stopped ({len(self.shell_recorder.events)} events)")
+            self.lbl_shell_rec_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
 
     def get_latest_output(self) -> str:
         """Returns the most recent output from shell or logs for AI analysis."""
@@ -457,48 +525,35 @@ class TerminalWidget(QWidget):
             )
             return None
 
-        ev_dir = Path("storage/evidence")
-        ev_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        ev_file = ev_dir / f"terminal_{source}_{self.active_project.id}_{ts}.log"
-        ev_file.write_text(content, encoding="utf-8")
-        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        # If saving from shell and recorder has events, use the recorder
+        if source == "shell" and self.shell_recorder.events:
+            rec = self.shell_recorder
+        else:
+            rec = TerminalSessionRecorder(project_id=self.active_project.id)
+            rec.start(project_id=self.active_project.id, cwd=self.cwd)
+            rec.record_output(content)
+            rec.stop(exit_status=0)
 
-        # Record ToolExecution in database
-        tool_exec = ToolExecution(
-            project_id=self.active_project.id,
-            tool_name=f"terminal_{source}",
-            command=f"Interactive Terminal {source.title()} Session Record",
-            status=ExecutionStatus.COMPLETED,
-            exit_code=0,
-            raw_output_path=str(ev_file),
-        )
-        saved_exec = self.db.create_execution(tool_exec)
+        res = rec.save_session_as_evidence(db=self.db, project_id=self.active_project.id)
 
-        # Record Evidence in database
-        ev = Evidence(
-            project_id=self.active_project.id,
-            execution_id=saved_exec.id,
-            file_path=str(ev_file),
-            sha256_hash=sha256,
-            description=f"Terminal {source} session recorded at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            mime_type="text/plain",
-        )
-        saved_evidence = self.db.add_evidence(ev)
+        # Refresh vault view if available
+        if hasattr(self, "session_vault"):
+            self.session_vault.load_sessions()
 
         self.append_system_msg(
-            f"💾 Terminal {source} session saved as Evidence #{saved_evidence.id} (SHA-256: {sha256[:12]}...). Included in report."
+            f"💾 Terminal {source} session saved as Evidence #{res.evidence.id} (SHA-256: {res.sha256_hash[:12]}...). Included in report."
         )
 
+        dup_msg = "\n(Session record verified in cryptographic vault)" if res.is_duplicate else ""
         QMessageBox.information(
             self,
             "Evidence Saved",
-            f"Terminal session successfully saved as Project Evidence #{saved_evidence.id}!\n\n"
-            f"File: {ev_file.name}\n"
-            f"SHA-256 Hash: {sha256}\n\n"
-            "This session record is now permanently linked to the project and will appear in generated reports.",
+            f"Terminal session successfully vaulted as Project Evidence #{res.evidence.id}!\n\n"
+            f"File: {Path(res.plain_path).name}\n"
+            f"SHA-256 Hash:\n{res.sha256_hash}\n\n"
+            f"This session record is permanently vaulted and will appear in generated reports.{dup_msg}",
         )
-        return saved_evidence
+        return res.evidence
 
     def copy_all(self):
         QApplication.clipboard().setText(self.log_text.toPlainText())

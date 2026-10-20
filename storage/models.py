@@ -127,3 +127,22 @@ class Evidence:
             self.sha256_hash = self.file_hash
         elif not self.file_hash and self.sha256_hash:
             self.file_hash = self.sha256_hash
+
+
+@dataclass
+class TerminalSessionRecord:
+    session_id: str
+    project_id: int
+    id: Optional[int] = None
+    started_at: str = field(default_factory=_utc_now_iso)
+    ended_at: Optional[str] = None
+    working_directory: str = ""
+    exit_status: Optional[int] = None
+    raw_output_path: Optional[str] = None
+    plain_text_path: Optional[str] = None
+    sha256_hash: str = ""
+    evidence_id: Optional[int] = None
+    execution_id: Optional[int] = None
+    command_count: int = 0
+    commands_json: str = "[]"
+    created_at: str = field(default_factory=_utc_now_iso)

@@ -20,6 +20,7 @@ from storage.models import (
     ProjectStatus,
     TargetScope,
     TargetType,
+    TerminalSessionRecord,
     ToolExecution,
     ValidationStatus,
 )
@@ -95,6 +96,27 @@ CREATE TABLE IF NOT EXISTS evidence (
     created_at TEXT NOT NULL,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY (finding_id) REFERENCES findings(id) ON DELETE SET NULL,
+    FOREIGN KEY (execution_id) REFERENCES tool_executions(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS terminal_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL UNIQUE,
+    project_id INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    working_directory TEXT DEFAULT '',
+    exit_status INTEGER,
+    raw_output_path TEXT,
+    plain_text_path TEXT,
+    sha256_hash TEXT DEFAULT '',
+    evidence_id INTEGER,
+    execution_id INTEGER,
+    command_count INTEGER DEFAULT 0,
+    commands_json TEXT DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (evidence_id) REFERENCES evidence(id) ON DELETE SET NULL,
     FOREIGN KEY (execution_id) REFERENCES tool_executions(id) ON DELETE SET NULL
 );
 """
@@ -411,6 +433,139 @@ class Database:
                     execution_id=row["execution_id"],
                     description=row["description"],
                     mime_type=row["mime_type"],
+                    created_at=row["created_at"],
+                )
+                for row in rows
+            ]
+
+    def get_evidence_by_hash(self, project_id: int, sha256_hash: str) -> Optional[Evidence]:
+        """Finds an evidence record by SHA-256 hash to prevent duplicate entries."""
+        query = "SELECT * FROM evidence WHERE project_id = ? AND sha256_hash = ? LIMIT 1"
+        with self.session() as conn:
+            row = conn.execute(query, (project_id, sha256_hash)).fetchone()
+            if not row:
+                return None
+            return Evidence(
+                id=row["id"],
+                project_id=row["project_id"],
+                file_path=row["file_path"],
+                sha256_hash=row["sha256_hash"],
+                finding_id=row["finding_id"],
+                execution_id=row["execution_id"],
+                description=row["description"],
+                mime_type=row["mime_type"],
+                created_at=row["created_at"],
+            )
+
+    # ---------------------------------------------------------
+    # Terminal Session Operations
+    # ---------------------------------------------------------
+    def create_terminal_session(self, session: TerminalSessionRecord) -> TerminalSessionRecord:
+        """Records an interactive terminal session in SQLite."""
+        query = """
+            INSERT INTO terminal_sessions (
+                session_id, project_id, started_at, ended_at, working_directory,
+                exit_status, raw_output_path, plain_text_path, sha256_hash,
+                evidence_id, execution_id, command_count, commands_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        with self.session() as conn:
+            cursor = conn.execute(
+                query,
+                (
+                    session.session_id,
+                    session.project_id,
+                    session.started_at,
+                    session.ended_at,
+                    session.working_directory,
+                    session.exit_status,
+                    session.raw_output_path,
+                    session.plain_text_path,
+                    session.sha256_hash,
+                    session.evidence_id,
+                    session.execution_id,
+                    session.command_count,
+                    session.commands_json,
+                    session.created_at,
+                ),
+            )
+            session.id = cursor.lastrowid
+            return session
+
+    def update_terminal_session(self, session: TerminalSessionRecord) -> None:
+        """Updates timestamps, paths, hashes, and exit status for a terminal session."""
+        query = """
+            UPDATE terminal_sessions
+            SET ended_at = ?, working_directory = ?, exit_status = ?,
+                raw_output_path = ?, plain_text_path = ?, sha256_hash = ?,
+                evidence_id = ?, execution_id = ?, command_count = ?, commands_json = ?
+            WHERE session_id = ?
+        """
+        with self.session() as conn:
+            conn.execute(
+                query,
+                (
+                    session.ended_at,
+                    session.working_directory,
+                    session.exit_status,
+                    session.raw_output_path,
+                    session.plain_text_path,
+                    session.sha256_hash,
+                    session.evidence_id,
+                    session.execution_id,
+                    session.command_count,
+                    session.commands_json,
+                    session.session_id,
+                ),
+            )
+
+    def get_terminal_session(self, session_id: str) -> Optional[TerminalSessionRecord]:
+        """Retrieves a terminal session by its unique session_id."""
+        query = "SELECT * FROM terminal_sessions WHERE session_id = ? LIMIT 1"
+        with self.session() as conn:
+            row = conn.execute(query, (session_id,)).fetchone()
+            if not row:
+                return None
+            return TerminalSessionRecord(
+                id=row["id"],
+                session_id=row["session_id"],
+                project_id=row["project_id"],
+                started_at=row["started_at"],
+                ended_at=row["ended_at"],
+                working_directory=row["working_directory"],
+                exit_status=row["exit_status"],
+                raw_output_path=row["raw_output_path"],
+                plain_text_path=row["plain_text_path"],
+                sha256_hash=row["sha256_hash"],
+                evidence_id=row["evidence_id"],
+                execution_id=row["execution_id"],
+                command_count=row["command_count"],
+                commands_json=row["commands_json"],
+                created_at=row["created_at"],
+            )
+
+    def list_terminal_sessions(self, project_id: int) -> List[TerminalSessionRecord]:
+        """Lists all recorded terminal sessions for a project."""
+        query = "SELECT * FROM terminal_sessions WHERE project_id = ? ORDER BY id DESC"
+        with self.session() as conn:
+            rows = conn.execute(query, (project_id,)).fetchall()
+            return [
+                TerminalSessionRecord(
+                    id=row["id"],
+                    session_id=row["session_id"],
+                    project_id=row["project_id"],
+                    started_at=row["started_at"],
+                    ended_at=row["ended_at"],
+                    working_directory=row["working_directory"],
+                    exit_status=row["exit_status"],
+                    raw_output_path=row["raw_output_path"],
+                    plain_text_path=row["plain_text_path"],
+                    sha256_hash=row["sha256_hash"],
+                    evidence_id=row["evidence_id"],
+                    execution_id=row["execution_id"],
+                    command_count=row["command_count"],
+                    commands_json=row["commands_json"],
                     created_at=row["created_at"],
                 )
                 for row in rows
