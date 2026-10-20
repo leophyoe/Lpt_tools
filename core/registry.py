@@ -210,7 +210,7 @@ class ToolRegistry:
             has_gui=False,
             has_parser=False,
             install_guide="sudo apt install zaproxy or launch /usr/local/bin/zap.sh",
-            safe_test_args=["-version"],
+            safe_test_args=["-dir", "/tmp/.ZAP", "-version"],
         ),
 
         # System / Password / Forensics
@@ -447,28 +447,64 @@ class ToolRegistry:
         }
         self.refresh()
 
+    @staticmethod
+    def _is_error_output(text: str) -> bool:
+        """Determines if command output represents a fatal runtime or dependency error."""
+        if not text:
+            return False
+        lowered = text.lower()
+        error_indicators = (
+            "error:",
+            "fatal:",
+            "traceback (most recent call last):",
+            "required module not found",
+            "cannot locate",
+            "can't locate",
+            "read-only file system",
+            "permission denied",
+            "command not found",
+            "syntaxerror:",
+            "modulenotfounderror:",
+        )
+        return any(ind in lowered for ind in error_indicators)
+
     def refresh(self) -> None:
         """Scan system PATH and local fallback source paths to discover tools and versions."""
         for tool in self._tools.values():
             found_path = shutil.which(tool.binary_name)
             if found_path:
                 tool.binary_path = found_path
-                tool.is_installed = True
-                tool.has_cli = True
-                tool.version = self._detect_version(found_path, tool.version_flag)
-                tool.error_message = None
+                ver, err = self._detect_version(found_path, tool.version_flag)
+                if err or not ver:
+                    tool.is_installed = False
+                    tool.has_cli = False
+                    tool.version = None
+                    tool.error_message = err or "Executable returned error when querying version."
+                else:
+                    tool.is_installed = True
+                    tool.has_cli = True
+                    tool.version = ver
+                    tool.error_message = None
             elif tool.fallback_source_path and Path(tool.fallback_source_path).is_file():
                 resolved = str(Path(tool.fallback_source_path).resolve())
                 tool.binary_path = resolved
-                tool.is_installed = True
-                tool.has_cli = True
                 if tool.is_python_script:
-                    tool.version = self._detect_python_script_version(
+                    ver, err = self._detect_python_script_version(
                         resolved, tool.version_flag, tool.python_path_dir
                     )
                 else:
-                    tool.version = self._detect_version(resolved, tool.version_flag)
-                tool.error_message = None
+                    ver, err = self._detect_version(resolved, tool.version_flag)
+
+                if err or not ver:
+                    tool.is_installed = False
+                    tool.has_cli = False
+                    tool.version = None
+                    tool.error_message = err or "Executable returned error when querying version."
+                else:
+                    tool.is_installed = True
+                    tool.has_cli = True
+                    tool.version = ver
+                    tool.error_message = None
             elif tool.name == "c0desec" and tool.fallback_source_path and Path(tool.fallback_source_path).is_dir():
                 # c0desec is integrated directly via Python adapter
                 tool.binary_path = str(Path(tool.fallback_source_path).resolve())
@@ -486,35 +522,39 @@ class ToolRegistry:
                 else:
                     tool.error_message = "Executable not found on system PATH."
 
-    @staticmethod
-    def _detect_version(binary_path: str, version_flag: str) -> Optional[str]:
+    @classmethod
+    def _detect_version(cls, binary_path: str, version_flag: str) -> Tuple[Optional[str], Optional[str]]:
         try:
             res = subprocess.run(
                 [binary_path, version_flag],
                 capture_output=True,
                 text=True,
-                timeout=3,
+                timeout=4,
                 check=False,
             )
             output = res.stdout.strip() or res.stderr.strip()
+            if cls._is_error_output(output) or (res.returncode != 0 and res.returncode not in (0, 255)):
+                err_line = output.splitlines()[0] if output else f"Exited with code {res.returncode}"
+                return None, err_line
             if output:
-                return output.splitlines()[0]
-        except (subprocess.SubprocessError, OSError):
-            pass
-        return None
+                return output.splitlines()[0], None
+        except (subprocess.SubprocessError, OSError) as exc:
+            return None, str(exc)
+        return None, "No version output received."
 
-    @staticmethod
+    @classmethod
     def _detect_python_script_version(
-        script_path: str, version_flag: str, python_path_dir: Optional[str] = None
-    ) -> Optional[str]:
+        cls, script_path: str, version_flag: str, python_path_dir: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
         env = dict(os.environ)
         if python_path_dir:
             resolved_pypath = str(Path(python_path_dir).resolve())
             env["PYTHONPATH"] = f"{resolved_pypath}:{env.get('PYTHONPATH', '')}"
 
         try:
+            cmd = [sys.executable, script_path, version_flag] if script_path.endswith(".py") else [script_path, version_flag]
             res = subprocess.run(
-                [sys.executable, script_path, version_flag],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=4,
@@ -522,16 +562,19 @@ class ToolRegistry:
                 env=env,
             )
             output = res.stdout.strip() or res.stderr.strip()
+            if cls._is_error_output(output) or (res.returncode != 0 and res.returncode not in (0, 255)):
+                err_line = output.splitlines()[0] if output else f"Exited with code {res.returncode}"
+                return None, err_line
             if output:
                 # Filter out ascii art or empty lines if any
                 for line in output.splitlines():
                     cleaned = line.strip()
                     if cleaned and ("version" in cleaned.lower() or "v" in cleaned.lower() or "#" in cleaned):
-                        return cleaned
-                return output.splitlines()[0]
-        except (subprocess.SubprocessError, OSError):
-            pass
-        return None
+                        return cleaned, None
+                return output.splitlines()[0], None
+        except (subprocess.SubprocessError, OSError) as exc:
+            return None, str(exc)
+        return None, "No version output received."
 
     def get_tool(self, name: str) -> Optional[ToolMetadata]:
         return self._tools.get(name)
@@ -552,7 +595,7 @@ class ToolRegistry:
         if not tool or not tool.is_installed or not tool.binary_path:
             raise FileNotFoundError(f"Security tool '{tool_name}' is not installed or available.")
 
-        if tool.is_python_script:
+        if tool.is_python_script and tool.binary_path.endswith(".py"):
             return [sys.executable, tool.binary_path] + args
         return [tool.binary_path] + args
 
@@ -590,8 +633,10 @@ class ToolRegistry:
             result = runner.run(cmd, timeout=timeout, env=env)
             output = (result.stdout.strip() or result.stderr.strip())
             
-            # Non-zero exit with version/help output (e.g. hydra exits 0 or 255 on -h)
-            is_success = (result.exit_code == 0) or (bool(output) and result.exit_code in (0, 1, 255))
+            has_error = self._is_error_output(output)
+            is_success = (result.exit_code == 0 and not has_error) or (
+                not has_error and bool(output) and result.exit_code in (0, 255)
+            )
             return is_success, output, (result.exit_code if result.exit_code is not None else -1)
         except Exception as exc:
             return False, f"Execution failed: {exc}", -1

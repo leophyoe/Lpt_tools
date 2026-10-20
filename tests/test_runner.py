@@ -84,3 +84,21 @@ def test_process_runner_rejects_empty_command():
     runner = ProcessRunner()
     with pytest.raises(ValueError):
         runner.run([])
+
+
+def test_process_runner_executes_bin_wrappers_with_code_zero():
+    """Verify ProcessRunner executes bin/ wrappers (sqlmap, wafw00f) with exit code 0."""
+    runner = ProcessRunner()
+    res_sql = runner.run(["sqlmap", "--version"], timeout=5.0)
+    assert res_sql.status == ExecutionStatus.COMPLETED
+    assert res_sql.exit_code == 0
+    assert "SyntaxError" not in res_sql.stdout
+    assert "SyntaxError" not in res_sql.stderr
+    assert "1.10" in res_sql.stdout
+
+    res_waf = runner.run(["wafw00f", "--version"], timeout=5.0)
+    assert res_waf.status == ExecutionStatus.COMPLETED
+    assert res_waf.exit_code == 0
+    assert "SyntaxError" not in res_waf.stdout
+    assert "WAFW00F" in res_waf.stdout
+
