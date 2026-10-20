@@ -11,6 +11,7 @@ import json
 import re
 import socket
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -60,6 +61,8 @@ class WebScanOptions:
     discover_endpoints: bool = True
     check_dns: bool = True
     timeout: float = 10.0
+    max_response_size: int = 5 * 1024 * 1024  # 5 MB max response limit
+    rate_limit_delay: float = 0.05  # Seconds between requests
 
 
 @dataclass
@@ -112,10 +115,23 @@ class WebSecurityAdapter:
         session: Optional[requests.Session] = None,
     ) -> Tuple[bool, str, Optional[WebScanResult], Optional[ToolExecution]]:
         """Run authorized web assessment within scope, stream logs, and save findings."""
-        self._is_cancelled = False
         target = options.target_url.strip()
         if not target.startswith(("http://", "https://")):
             target = f"http://{target}"
+
+        if self._is_cancelled:
+            execution = ToolExecution(
+                project_id=project_id,
+                tool_name="c0desec",
+                command=f"c0desec-web-assessment {target}",
+                status=ExecutionStatus.CANCELLED,
+            )
+            execution = self.db.create_execution(execution)
+            if on_output:
+                on_output("[-] Assessment cancelled by user.\n", "stderr")
+            return True, "Assessment cancelled by user", None, execution
+
+        self._is_cancelled = False
 
         # 1. Enforce Scope Authorization
         parsed_target = urlparse(target)
@@ -161,11 +177,21 @@ class WebSecurityAdapter:
         response = None
         raw_body = ""
         try:
-            emit(f"[*] Sending probe to {target}...\n", "stdout")
+            emit(f"[*] Sending probe to {target} (timeout: {options.timeout}s)...\n", "stdout")
             response = http.get(target, timeout=options.timeout, allow_redirects=True)
             scan_result.headers = dict(response.headers)
-            raw_body = response.text or ""
-            emit(f"    [+] HTTP Status: {response.status_code} ({len(raw_body)} bytes)\n", "stdout")
+            raw_text = response.text or ""
+            if len(raw_text) > options.max_response_size:
+                emit(f"    [!] Response body ({len(raw_text)} bytes) exceeded max size limit; truncating to {options.max_response_size} bytes\n", "stderr")
+                raw_body = raw_text[:options.max_response_size]
+            else:
+                raw_body = raw_text
+            emit(f"    [+] HTTP Status: {response.status_code} ({len(raw_body)} bytes received)\n", "stdout")
+        except requests.exceptions.Timeout as e:
+            emit(f"[-] Connection to {target} timed out after {options.timeout}s: {e}\n", "stderr")
+            execution.status = ExecutionStatus.TIMEOUT
+            self.db.update_execution(execution)
+            return True, f"Timeout after {options.timeout}s", scan_result, execution
         except Exception as e:
             emit(f"[-] Web request to {target} failed: {e}\n", "stderr")
             execution.status = ExecutionStatus.FAILED
@@ -190,7 +216,14 @@ class WebSecurityAdapter:
         # 8. JavaScript Secret Candidate Detection
         if options.check_js_secrets and not self._is_cancelled:
             emit("[*] Scanning web assets and JavaScript for secrets...\n", "stdout")
-            self._scan_for_secrets(target, raw_body, scan_result, project_id, execution.id, http, options.timeout, emit)
+            self._scan_for_secrets(target, raw_body, scan_result, project_id, execution.id, http, options, emit)
+
+        # Check cancellation before saving findings
+        if self._is_cancelled:
+            execution.status = ExecutionStatus.CANCELLED
+            self.db.update_execution(execution)
+            emit("[-] Assessment cancelled by user.\n", "stderr")
+            return True, "Assessment cancelled by user", scan_result, execution
 
         # 9. Evidence Persistence with SHA-256
         if evidence_dir and raw_body:
@@ -371,7 +404,7 @@ class WebSecurityAdapter:
         project_id: int,
         execution_id: int,
         http: requests.Session,
-        timeout: float,
+        options: WebScanOptions,
         emit: Callable,
     ):
         # 1. Scan main HTML body
@@ -387,10 +420,12 @@ class WebSecurityAdapter:
             if self._is_cancelled:
                 break
             try:
-                resp = http.get(js_url, timeout=timeout)
+                time.sleep(options.rate_limit_delay)
+                resp = http.get(js_url, timeout=options.timeout)
                 if resp.status_code == 200 and resp.text:
-                    emit(f"    [*] Scanning script: {js_url} ({len(resp.text)} bytes)...\n", "stdout")
-                    self._scan_text_blob(resp.text, js_url, result, project_id, execution_id, emit)
+                    script_text = resp.text[:options.max_response_size]
+                    emit(f"    [*] Scanning script: {js_url} ({len(script_text)} bytes)...\n", "stdout")
+                    self._scan_text_blob(script_text, js_url, result, project_id, execution_id, emit)
             except Exception:
                 pass
 
@@ -443,3 +478,4 @@ class WebSecurityAdapter:
                         execution_id=execution_id,
                     )
                 )
+
