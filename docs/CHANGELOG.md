@@ -33,5 +33,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - Tab 3: ⚡ Practical Command & One-Liner Cheat Sheet (Nmap, NetExec, Pivoting, Chisel, SMB, Metasploit).
   - Reference materials collected in `labs/cpent/references/`: Vitaly Ford CPENT notes, CPENT-Crash-Course, CPENT-Learning, and CPENTv1StudyGuide.
   - Integration of `c0desec-pentest` in `source/web/c0desec-pentest` for web/API security testing.
+- **Web & API Security Integration (Phase 4 / c0desec Adapter)**:
+  - `WebSecurityAdapter` in `modules/web/c0desec_adapter.py` providing safe, passive web application & API reconnaissance with strict scope enforcement.
+  - Integration with `source/web/c0desec-pentest` constants and secret detection regex patterns (`SECRET_PATTERNS`).
+  - Automated sensitive-value redaction via `redact_secret_value()` ensuring credentials/tokens are never exposed in logs or findings.
+  - HTTP security header inspection (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Server version disclosures).
+  - Insecure CORS misconfiguration detection (reflective origins with credentials).
+  - Web route & endpoint extraction from HTML anchors, scripts, and forms.
+  - Raw JSON evidence vault archiving with SHA-256 cryptographic integrity hash.
+  - Desktop `WebScanView` in `desktop/views/web_scan_view.py` with multi-tab results display (Discovered Routes, JS Secret Candidates, Response Headers), background worker thread, cancel capability, and real-time terminal streaming.
+  - Integration into `MainWindow` navigation bar and project-switching signal pipeline.
 - **Comprehensive Test Suite**:
-  - 35 automated tests across all domain models, scope authorization, process runner, Nmap adapter/parser, curriculum, 30-day study plan, and PySide6 UI. All 35 tests passing.
+  - 41 automated tests across all domain models, scope authorization, process runner, Nmap adapter/parser, curriculum, 30-day study plan, c0desec adapter, and PySide6 UI. All 41 tests passing.
