@@ -945,3 +945,4 @@ class ReportBuilder:
             "markdown": md_path,
             "json": json_path,
         }
+

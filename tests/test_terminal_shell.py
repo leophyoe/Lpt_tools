@@ -83,3 +83,27 @@ def test_terminal_shell_handles_failed_command(qtbot):
 
     qtbot.waitUntil(lambda: "Execution error" in terminal.shell_text.toPlainText() or "exited with code" in terminal.shell_text.toPlainText(), timeout=4000)
     assert terminal.btn_run.isEnabled()
+
+
+def test_vscode_terminal_pty_lifecycle(qtbot, tmp_path):
+    from desktop.widgets.vscode_terminal import VSCodeTerminal
+
+    term = VSCodeTerminal(cwd=str(tmp_path))
+    qtbot.addWidget(term)
+
+    assert term.process is not None
+    assert term.process.poll() is None
+    assert term.master_fd is not None
+    assert term.server is not None
+    assert term.server.isListening()
+
+    # Test restart
+    term.restart_shell()
+    assert term.process is not None
+    assert term.process.poll() is None
+
+    # Test cleanup
+    term.close_pty()
+    assert term.process is None
+    assert term.master_fd is None
+

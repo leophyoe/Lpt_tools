@@ -241,3 +241,4 @@ class SQLMapAdapter:
             )
 
         return findings
+

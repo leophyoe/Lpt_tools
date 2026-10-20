@@ -154,3 +154,4 @@ def test_sqlmap_safe_local_run(db: Database, tmp_path: Path):
     ev_list = db.list_evidence(project.id)
     assert len(ev_list) == 1
     assert ev_list[0].execution_id == exec_rec.id
+

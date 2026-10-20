@@ -54,3 +54,4 @@
 To make tools authentically usable in `CyberSecuritySuite`, we resolve tools via a dual discovery mechanism in `core/registry.py`:
 1. **System Host Binaries (`shutil.which`):** For tools installed system-wide on Ubuntu (`nmap`, `gobuster`, `hydra`, `hashcat`, `binwalk`, `john`).
 2. **Project Source Wrappers (`source/**`):** For Python-based tools cloned in the repository (`sqlmap`, `c0desec`, `wafw00f`, `volatility3`). The platform resolves their Python entrypoints directly without requiring global installation.
+

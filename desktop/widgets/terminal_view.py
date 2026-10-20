@@ -94,7 +94,19 @@ class TerminalWidget(QWidget):
         self.tabs = QTabWidget()
 
         # -------------------------------------------------------------
-        # Tab 1: Interactive Command Shell
+        # Tab 1: VS Code-like Interactive PTY Terminal (xterm.js)
+        # -------------------------------------------------------------
+        self.vscode_term = None
+        if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            try:
+                from desktop.widgets.vscode_terminal import VSCodeTerminal
+                self.vscode_term = VSCodeTerminal(cwd=self.cwd)
+                self.tabs.addTab(self.vscode_term, "🖥️ VS Code Terminal (Interactive PTY)")
+            except Exception:
+                self.vscode_term = None
+
+        # -------------------------------------------------------------
+        # Tab 2: Interactive Command Shell
         # -------------------------------------------------------------
         shell_widget = QWidget()
         shell_layout = QVBoxLayout(shell_widget)
@@ -376,3 +388,8 @@ class TerminalWidget(QWidget):
 
     def copy_all(self):
         QApplication.clipboard().setText(self.log_text.toPlainText())
+
+    def closeEvent(self, event):
+        if self.vscode_term:
+            self.vscode_term.close_pty()
+        super().closeEvent(event)

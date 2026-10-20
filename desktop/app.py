@@ -1,6 +1,11 @@
 """Application entrypoint for launching CyberSecuritySuite desktop interface."""
 
+import os
 import sys
+
+# Ensure Chromium WebEngine runs reliably without sandbox restrictions in local Linux environment
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu")
+
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
