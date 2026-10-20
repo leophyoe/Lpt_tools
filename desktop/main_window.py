@@ -84,6 +84,12 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(self.btn_cpent)
         side_layout.addStretch()
 
+        self.btn_ai_settings = QPushButton("⚙️  AI & API Settings")
+        self.btn_ai_settings.setProperty("class", "nav-btn")
+        self.btn_ai_settings.setStyleSheet("text-align: left; padding: 8px 12px; font-weight: 500;")
+        self.btn_ai_settings.clicked.connect(self._open_ai_settings)
+        side_layout.addWidget(self.btn_ai_settings)
+
         main_layout.addWidget(sidebar)
 
         # 2. Right Content Area (Splitter between Views and Terminal)
@@ -162,3 +168,13 @@ class MainWindow(QMainWindow):
         elif tool_name in ("volatility3", "bandit"):
             self.btn_findings.setChecked(True)
             self.view_stack.setCurrentIndex(3)
+
+    def _open_ai_settings(self):
+        from desktop.dialogs.ai_settings_dialog import AISettingsDialog
+        engine = getattr(self.terminal_widget, "ai_assistant", None)
+        engine_obj = engine.engine if engine else None
+        dlg = AISettingsDialog(engine=engine_obj, parent=self)
+        if dlg.exec():
+            if engine:
+                engine._on_provider_changed(engine.provider_combo.currentIndex())
+

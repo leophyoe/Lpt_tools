@@ -13,6 +13,7 @@ from typing import List, Optional
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -81,9 +82,19 @@ class TerminalAIAssistantWidget(QWidget):
             "Built-in Security Engine (100% Offline)",
             "Local Ollama (http://127.0.0.1:11434)",
             "Google Gemini API (Cloud)",
+            "OpenAI API (Cloud)",
         ])
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         top_bar.addWidget(self.provider_combo)
+
+        self.lbl_key_status = QLabel("● Offline Ready")
+        self.lbl_key_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: bold;")
+        top_bar.addWidget(self.lbl_key_status)
+
+        self.btn_open_settings = QPushButton("⚙️ AI Settings & Keys")
+        self.btn_open_settings.setFixedHeight(24)
+        self.btn_open_settings.clicked.connect(self._open_ai_settings)
+        top_bar.addWidget(self.btn_open_settings)
 
         layout.addLayout(top_bar)
 
@@ -112,6 +123,12 @@ class TerminalAIAssistantWidget(QWidget):
         self.btn_diagnose.clicked.connect(self._diagnose_terminal_output)
         diag_hdr.addWidget(self.btn_diagnose)
         diag_layout.addLayout(diag_hdr)
+
+        self.chk_consent = QCheckBox("Consent to send sanitized terminal snippet to Cloud AI (Passwords and tokens automatically redacted)")
+        self.chk_consent.setChecked(True)
+        self.chk_consent.setVisible(False)
+        self.chk_consent.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        diag_layout.addWidget(self.chk_consent)
 
         self.txt_diagnosis = QTextEdit()
         self.txt_diagnosis.setReadOnly(True)
@@ -207,10 +224,41 @@ class TerminalAIAssistantWidget(QWidget):
     def _on_provider_changed(self, index: int):
         if index == 0:
             self.engine.provider = AIProvider.BUILTIN_OFFLINE
+            self.lbl_key_status.setText("● Offline Ready")
+            self.lbl_key_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: bold;")
+            self.chk_consent.setVisible(False)
         elif index == 1:
             self.engine.provider = AIProvider.LOCAL_OLLAMA
+            self.lbl_key_status.setText("● Local (No Key)")
+            self.lbl_key_status.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: bold;")
+            self.chk_consent.setVisible(False)
         elif index == 2:
             self.engine.provider = AIProvider.GEMINI_API
+            has_key = bool(self.engine.get_api_key(AIProvider.GEMINI_API))
+            if has_key:
+                self.lbl_key_status.setText("● Key Ready")
+                self.lbl_key_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: bold;")
+            else:
+                self.lbl_key_status.setText("⚠️ Key Missing (Click ⚙️)")
+                self.lbl_key_status.setStyleSheet("color: #f87171; font-size: 11px; font-weight: bold;")
+            self.chk_consent.setVisible(True)
+        elif index == 3:
+            self.engine.provider = AIProvider.OPENAI_API
+            has_key = bool(self.engine.get_api_key(AIProvider.OPENAI_API))
+            if has_key:
+                self.lbl_key_status.setText("● Key Ready")
+                self.lbl_key_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: bold;")
+            else:
+                self.lbl_key_status.setText("⚠️ Key Missing (Click ⚙️)")
+                self.lbl_key_status.setStyleSheet("color: #f87171; font-size: 11px; font-weight: bold;")
+            self.chk_consent.setVisible(True)
+
+    @Slot()
+    def _open_ai_settings(self):
+        from desktop.dialogs.ai_settings_dialog import AISettingsDialog
+        dlg = AISettingsDialog(self.engine, parent=self)
+        if dlg.exec():
+            self._on_provider_changed(self.provider_combo.currentIndex())
 
     @Slot()
     def _diagnose_terminal_output(self):
@@ -222,9 +270,10 @@ class TerminalAIAssistantWidget(QWidget):
             self.txt_diagnosis.setPlainText("Terminal has no recorded output to analyze yet. Run a command first.")
             return
 
-        diag = self.engine.diagnose_output(output)
+        user_consented = self.chk_consent.isChecked() if self.chk_consent.isVisible() else True
+        diag = self.engine.diagnose_output(output, user_consented=user_consented)
         text = (
-            f"=== Technical Analysis ===\n{diag.analysis}\n\n"
+            f"=== Technical Analysis ({diag.provider_used}) ===\n{diag.analysis}\n\n"
             f"=== Root Cause / Observation ===\n{diag.root_cause}\n\n"
             f"=== Recommended Action / Remediation ===\n{diag.suggested_fix}\n"
         )

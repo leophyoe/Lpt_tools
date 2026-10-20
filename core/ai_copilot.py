@@ -4,8 +4,14 @@ Provides terminal output analysis, error diagnostics, natural language to pentes
 command synthesis with scope guard verification, and automated vulnerability finding
 extraction for assessment reports.
 
-Supports Local Ollama (offline), Google Gemini API, and a built-in expert cybersecurity
-heuristic engine that operates 100% offline without external services.
+Supports:
+1. Built-in Expert Cybersecurity Heuristic Engine (100% Offline, zero setup).
+2. Google Gemini API (Cloud - gemini-1.5-flash, gemini-1.5-pro, etc.).
+3. OpenAI API (Cloud - gpt-4o-mini, gpt-4o, etc.).
+4. Local Ollama (Offline LLMs - llama3, deepseek-r1, mistral at http://127.0.0.1:11434).
+
+All cloud API queries pass through strict sensitive data redaction to mask
+passwords, bearer tokens, AWS keys, and private keys prior to external transmission.
 """
 
 from __future__ import annotations
@@ -13,8 +19,8 @@ from __future__ import annotations
 import json
 import os
 import re
-import urllib.request
 import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -22,8 +28,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from core.credential_manager import CredentialManager
 from core.scope import ScopeAuthorizationService, ScopeCheckResult
 from storage.models import Finding, FindingSeverity, TargetScope, ValidationStatus
+from terminal.recorder import redact_sensitive_text
 
 
 def _utc_now_iso() -> str:
@@ -34,6 +42,7 @@ class AIProvider(str, Enum):
     BUILTIN_OFFLINE = "builtin_offline"
     LOCAL_OLLAMA = "local_ollama"
     GEMINI_API = "gemini_api"
+    OPENAI_API = "openai_api"
 
 
 @dataclass
@@ -43,6 +52,7 @@ class AIDiagnosticResult:
     suggested_fix: str
     suggested_command: Optional[str] = None
     severity: str = "INFO"
+    provider_used: str = "builtin_offline"
 
 
 @dataclass
@@ -53,29 +63,184 @@ class AICommandSuggestion:
     is_active: bool
     is_in_scope: bool
     scope_reason: str
+    provider_used: str = "builtin_offline"
 
 
 class AICopilotEngine:
-    """Intelligent cybersecurity copilot for terminal assistance and report generation."""
+    """Intelligent cybersecurity copilot supporting offline heuristics, Ollama, Gemini, and OpenAI."""
 
     def __init__(
         self,
         provider: AIProvider = AIProvider.BUILTIN_OFFLINE,
         ollama_url: str = "http://127.0.0.1:11434",
         ollama_model: str = "llama3",
+        gemini_model: str = "gemini-1.5-flash",
+        openai_model: str = "gpt-4o-mini",
         gemini_api_key: Optional[str] = None,
+        openai_api_key: Optional[str] = None,
     ):
         self.provider = provider
         self.ollama_url = ollama_url
         self.ollama_model = ollama_model
-        self.gemini_api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+        self.gemini_model = gemini_model
+        self.openai_model = openai_model
+        self._custom_gemini_key = gemini_api_key
+        self._custom_openai_key = openai_api_key
+
+    def get_api_key(self, provider: AIProvider) -> Optional[str]:
+        """Resolves active API key from instance configuration, credential manager, or environment."""
+        if provider == AIProvider.GEMINI_API:
+            if self._custom_gemini_key:
+                return self._custom_gemini_key
+            return CredentialManager.get_key("gemini")
+        elif provider == AIProvider.OPENAI_API:
+            if self._custom_openai_key:
+                return self._custom_openai_key
+            return CredentialManager.get_key("openai")
+        return None
+
+    def set_api_key(self, provider: AIProvider, api_key: str) -> bool:
+        """Saves an API key through the CredentialManager and updates current session state."""
+        clean = api_key.strip()
+        if provider == AIProvider.GEMINI_API:
+            self._custom_gemini_key = clean or None
+            return CredentialManager.set_key("gemini", clean)
+        elif provider == AIProvider.OPENAI_API:
+            self._custom_openai_key = clean or None
+            return CredentialManager.set_key("openai", clean)
+        return True
+
+    def clear_api_key(self, provider: AIProvider) -> bool:
+        """Removes the stored API key for the given provider."""
+        if provider == AIProvider.GEMINI_API:
+            self._custom_gemini_key = None
+            return CredentialManager.delete_key("gemini")
+        elif provider == AIProvider.OPENAI_API:
+            self._custom_openai_key = None
+            return CredentialManager.delete_key("openai")
+        return True
 
     # -----------------------------------------------------------------------
-    # 1. Output Diagnosis and Error Explanation
+    # Connection Verification
+    # -----------------------------------------------------------------------
+
+    def test_connection(
+        self,
+        provider: Optional[AIProvider] = None,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """Tests live connectivity to the selected AI provider."""
+        target_prov = provider or self.provider
+
+        if target_prov == AIProvider.BUILTIN_OFFLINE:
+            return True, "Built-in Cybersecurity Heuristic Engine ready (100% Offline, No network required)."
+
+        elif target_prov == AIProvider.LOCAL_OLLAMA:
+            url = f"{self.ollama_url.rstrip('/')}/api/tags"
+            target_model = model or self.ollama_model
+            try:
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=5.0) as resp:
+                    if resp.status == 200:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        models = [m.get("name", "") for m in data.get("models", [])]
+                        model_list = ", ".join(models[:4]) if models else "No models pulled yet"
+                        if target_model and models and not any(target_model in m for m in models):
+                            return False, f"Ollama is reachable, but model '{target_model}' is not downloaded. Pull it using 'ollama pull {target_model}'."
+                        return True, f"Ollama connection verified on {self.ollama_url}. Installed models: {model_list}"
+                    return False, f"Ollama returned HTTP status {resp.status}."
+            except urllib.error.URLError:
+                return False, f"Connection refused: Ollama is not running on {self.ollama_url}. Start Ollama with 'ollama serve'."
+            except Exception as e:
+                return False, f"Ollama error: {e}"
+
+        elif target_prov == AIProvider.GEMINI_API:
+            key = api_key or self.get_api_key(AIProvider.GEMINI_API)
+            if not key:
+                return False, "Gemini API key is not configured. Enter and save your Gemini API key in AI Settings."
+
+            target_model = model or self.gemini_model
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={key}"
+            payload = json.dumps({
+                "contents": [{"parts": [{"text": "ping"}]}],
+                "generationConfig": {"maxOutputTokens": 5, "temperature": 0.0},
+            }).encode("utf-8")
+
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=8.0) as resp:
+                    if resp.status == 200:
+                        return True, f"Google Gemini API verified successfully! Model: '{target_model}' is responsive."
+                    return False, f"Gemini API returned HTTP {resp.status}."
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403):
+                    return False, "Authentication Failed (401/403): Gemini API key is invalid or unauthorized."
+                elif e.code == 429:
+                    return False, "Quota Exceeded (429): Gemini API rate limit or project quota reached."
+                elif e.code == 404:
+                    return False, f"Model Not Found (404): Model '{target_model}' does not exist in Gemini API."
+                return False, f"Gemini API error (HTTP {e.code}): {e.reason}"
+            except urllib.error.URLError as e:
+                return False, f"Network Connection Error: Unable to reach Google API servers ({e.reason})."
+            except Exception as e:
+                return False, f"Gemini connection error: {e}"
+
+        elif target_prov == AIProvider.OPENAI_API:
+            key = api_key or self.get_api_key(AIProvider.OPENAI_API)
+            if not key:
+                return False, "OpenAI API key is not configured. Enter and save your OpenAI API key in AI Settings."
+
+            target_model = model or self.openai_model
+            url = "https://api.openai.com/v1/chat/completions"
+            payload = json.dumps({
+                "model": target_model,
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 5,
+                "temperature": 0.0,
+            }).encode("utf-8")
+
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {key}",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=8.0) as resp:
+                    if resp.status == 200:
+                        return True, f"OpenAI API verified successfully! Model: '{target_model}' is responsive."
+                    return False, f"OpenAI API returned HTTP {resp.status}."
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
+                    return False, "Authentication Failed (401): OpenAI API key is invalid."
+                elif e.code == 429:
+                    return False, "Quota Exceeded (429): OpenAI account quota depleted or rate limited."
+                return False, f"OpenAI API error (HTTP {e.code}): {e.reason}"
+            except urllib.error.URLError as e:
+                return False, f"Network Connection Error: Unable to reach OpenAI servers ({e.reason})."
+            except Exception as e:
+                return False, f"OpenAI connection error: {e}"
+
+        return False, "Unknown AI Provider."
+
+    # -----------------------------------------------------------------------
+    # Output Diagnosis and Error Explanation
     # -----------------------------------------------------------------------
 
     def diagnose_output(
-        self, output: str, exit_code: Optional[int] = None
+        self,
+        output: str,
+        exit_code: Optional[int] = None,
+        user_consented: bool = True,
     ) -> AIDiagnosticResult:
         """Analyzes terminal stdout/stderr to diagnose errors or summarize output."""
         clean_text = re.sub(r"\x1b\[[0-9;]*m", "", output).strip()
@@ -84,37 +249,122 @@ class AICopilotEngine:
                 analysis="Terminal output is empty.",
                 root_cause="No process output captured.",
                 suggested_fix="Execute a security tool or command in the terminal to inspect results.",
+                provider_used=self.provider.value,
             )
 
-        # Check for provider connectivity if remote provider is selected
-        if self.provider == AIProvider.LOCAL_OLLAMA:
-            remote_res = self._query_ollama(
-                prompt=f"You are a Senior Penetration Tester and CPENT Instructor. Analyze this security tool output and exit code {exit_code}.\n"
-                f"Explain the technical findings or why it failed, root cause, and the exact command to fix or proceed:\n\n{clean_text[-2500:]}"
-            )
-            if remote_res:
+        # 1. Cloud Provider: Gemini API
+        if self.provider == AIProvider.GEMINI_API:
+            key = self.get_api_key(AIProvider.GEMINI_API)
+            if not key:
                 return AIDiagnosticResult(
-                    analysis=remote_res,
-                    root_cause="Identified via Local Ollama analysis.",
-                    suggested_fix="Review the recommended commands and guidance above.",
+                    analysis="⚠️ Google Gemini API is selected, but no API key is configured.",
+                    root_cause="Missing Gemini API Key",
+                    suggested_fix="Click '⚙️ AI Settings' to configure your Gemini API key, or switch to the Built-in Offline Engine.",
+                    provider_used="gemini_api",
+                )
+            if not user_consented:
+                return AIDiagnosticResult(
+                    analysis="⚠️ Cloud Transmission Consent Required: Sending terminal output to Gemini API requires explicit consent.",
+                    root_cause="Consent Pending",
+                    suggested_fix="Check 'Consent to send redacted output to Cloud AI' or switch to the Built-in Offline Engine.",
+                    provider_used="gemini_api",
                 )
 
-        # Fallback to Built-in Cybersecurity Heuristic Knowledge Base
-        return self._heuristic_diagnose(clean_text, exit_code)
+            # Sanitize and redact passwords/tokens before sending
+            redacted_snippet = redact_sensitive_text(clean_text[-2500:])
+            prompt = (
+                "You are an expert Senior Penetration Tester and CPENT Instructor assisting an analyst.\n"
+                f"Analyze this terminal security tool output (Exit Code: {exit_code}).\n"
+                "Provide:\n"
+                "1. Brief technical analysis of what happened or vulnerabilities discovered.\n"
+                "2. Root cause of error or observation.\n"
+                "3. Recommended next action or exact CLI fix command.\n\n"
+                f"Terminal Output:\n{redacted_snippet}"
+            )
+            resp_text, err = self._query_gemini(prompt)
+            if resp_text:
+                cmd_match = re.search(r"```(?:bash|sh)?\n(.*?)\n```", resp_text, re.DOTALL)
+                sugg_cmd = cmd_match.group(1).strip() if cmd_match else None
+                return AIDiagnosticResult(
+                    analysis=resp_text,
+                    root_cause="Analysis generated by Google Gemini AI.",
+                    suggested_fix="Review findings and remediation steps generated above.",
+                    suggested_command=sugg_cmd,
+                    provider_used="gemini_api",
+                )
 
-    def _heuristic_diagnose(
-        self, output: str, exit_code: Optional[int]
-    ) -> AIDiagnosticResult:
-        lowered = output.lower()
+        # 2. Cloud Provider: OpenAI API
+        elif self.provider == AIProvider.OPENAI_API:
+            key = self.get_api_key(AIProvider.OPENAI_API)
+            if not key:
+                return AIDiagnosticResult(
+                    analysis="⚠️ OpenAI API is selected, but no API key is configured.",
+                    root_cause="Missing OpenAI API Key",
+                    suggested_fix="Click '⚙️ AI Settings' to configure your OpenAI API key, or switch to the Built-in Offline Engine.",
+                    provider_used="openai_api",
+                )
+            if not user_consented:
+                return AIDiagnosticResult(
+                    analysis="⚠️ Cloud Transmission Consent Required: Sending terminal output to OpenAI API requires explicit consent.",
+                    root_cause="Consent Pending",
+                    suggested_fix="Check 'Consent to send redacted output to Cloud AI' or switch to the Built-in Offline Engine.",
+                    provider_used="openai_api",
+                )
 
-        # 1. Permission Denied / Root Required
-        if "permission denied" in lowered or "you need to be root" in lowered or "privileges" in lowered:
+            redacted_snippet = redact_sensitive_text(clean_text[-2500:])
+            prompt = (
+                "You are an expert Senior Penetration Tester and CPENT Instructor assisting an analyst.\n"
+                f"Analyze this terminal security tool output (Exit Code: {exit_code}).\n"
+                "Provide:\n"
+                "1. Technical analysis of findings or errors.\n"
+                "2. Root cause.\n"
+                "3. Actionable next CLI command.\n\n"
+                f"Terminal Output:\n{redacted_snippet}"
+            )
+            resp_text, err = self._query_openai(prompt)
+            if resp_text:
+                cmd_match = re.search(r"```(?:bash|sh)?\n(.*?)\n```", resp_text, re.DOTALL)
+                sugg_cmd = cmd_match.group(1).strip() if cmd_match else None
+                return AIDiagnosticResult(
+                    analysis=resp_text,
+                    root_cause="Analysis generated by OpenAI.",
+                    suggested_fix="Review guidance generated above.",
+                    suggested_command=sugg_cmd,
+                    provider_used="openai_api",
+                )
+
+        # 3. Local Ollama Provider
+        elif self.provider == AIProvider.LOCAL_OLLAMA:
+            redacted_snippet = redact_sensitive_text(clean_text[-2500:])
+            prompt = (
+                "You are a Senior Penetration Tester and CPENT Instructor. Analyze this security tool output and exit code "
+                f"{exit_code}.\nExplain technical findings or errors, root cause, and the exact CLI command to proceed:\n\n{redacted_snippet}"
+            )
+            resp_text, err = self._query_ollama(prompt)
+            if resp_text:
+                return AIDiagnosticResult(
+                    analysis=resp_text,
+                    root_cause="Identified via Local Ollama analysis.",
+                    suggested_fix="Review the recommended commands and guidance above.",
+                    provider_used="local_ollama",
+                )
+
+        # 4. Fallback / Built-in Offline Heuristics Engine
+        return self._diagnose_offline(clean_text, exit_code)
+
+    def _diagnose_offline(self, clean_text: str, exit_code: Optional[int]) -> AIDiagnosticResult:
+        """Built-in cybersecurity heuristic engine operating 100% offline."""
+        lowered = clean_text.lower()
+
+        # 1. Permission Denied / Root Privileges
+        if "permission denied" in lowered or "you need to be root" in lowered or "operation not permitted" in lowered:
             return AIDiagnosticResult(
-                analysis="The requested operation requires elevated root or raw socket privileges.",
-                root_cause="Standard unprivileged execution cannot manipulate raw network interfaces or protected memory dumps.",
-                suggested_fix="Prepend 'sudo' to the command or configure POSIX file capabilities (e.g., setcap).",
-                suggested_command=f"sudo {output.splitlines()[-1] if output.splitlines() else ''}".strip(),
+                analysis="Execution halted due to insufficient operating system privileges.",
+                root_cause="The requested network operation (e.g. raw socket SYN scan) requires elevated root permissions.",
+                suggested_fix="Prefix command with 'sudo' or run the application in an authorized administrative session.",
+                suggested_command="sudo !!",
                 severity="HIGH",
+                provider_used="builtin_offline",
             )
 
         # 2. Connection Refused / Host Down
@@ -125,6 +375,7 @@ class AICopilotEngine:
                 suggested_fix="Verify target IP/URL availability. If using Nmap, append '-Pn' to disable ping probes.",
                 suggested_command="nmap -Pn -sV <target>",
                 severity="MEDIUM",
+                provider_used="builtin_offline",
             )
 
         # 3. Missing Dependencies or Wordlist
@@ -137,6 +388,7 @@ class AICopilotEngine:
                 suggested_fix=f"Install the missing package into the environment using: 'pip install {mod_name}'.",
                 suggested_command=f"pip install {mod_name}",
                 severity="MEDIUM",
+                provider_used="builtin_offline",
             )
 
         if "wordlist" in lowered and ("not found" in lowered or "does not exist" in lowered or "empty" in lowered):
@@ -146,6 +398,7 @@ class AICopilotEngine:
                 suggested_fix="Use system wordlists such as '/usr/share/dirb/wordlists/common.txt' or install SecLists.",
                 suggested_command="gobuster dir -u <url> -w /usr/share/dirb/wordlists/common.txt",
                 severity="LOW",
+                provider_used="builtin_offline",
             )
 
         # 4. SQLMap Specific
@@ -157,6 +410,7 @@ class AICopilotEngine:
                     suggested_fix="Use parameterized queries (Prepared Statements) or an ORM. Do not concatenate SQL.",
                     suggested_command="sqlmap -u <url> --batch --dbs",
                     severity="CRITICAL",
+                    provider_used="builtin_offline",
                 )
             if "target url appears to be protected by a waf" in lowered or "waf/ips" in lowered:
                 return AIDiagnosticResult(
@@ -165,29 +419,31 @@ class AICopilotEngine:
                     suggested_fix="Inspect WAF with WAFW00F, use tamper scripts (e.g. '--tamper=space2comment'), or adjust request delay.",
                     suggested_command="sqlmap -u <url> --tamper=between,randomcase --batch",
                     severity="HIGH",
+                    provider_used="builtin_offline",
                 )
 
         # 5. Nmap Success Summary
-        if "nmap scan report for" in lowered:
-            open_count = len(re.findall(r"\d+/(?:tcp|udp)\s+open", output))
+        if "nmap done:" in lowered or "nmap scan report" in lowered:
             return AIDiagnosticResult(
-                analysis=f"Nmap port scan completed successfully. Discovered {open_count} open network services.",
-                root_cause="Target host is active and responsive on scanned ports.",
-                suggested_fix="Review service banners and versions for unpatched CVEs or misconfigurations.",
-                suggested_command="nmap -sV -sC -p <open_ports> <target>",
+                analysis="Nmap network port scan completed successfully.",
+                root_cause="Host service exploration finished without network interruption.",
+                suggested_fix="Review discovered open ports below and use 'Extract Findings' to register them into the Assessment Report.",
                 severity="INFO",
+                provider_used="builtin_offline",
             )
 
-        # Default Generic Success or Notice
+        # Default fallback analysis
+        status_text = f"Process completed with exit code {exit_code}." if exit_code is not None else "Execution output captured."
         return AIDiagnosticResult(
-            analysis="Command output completed execution.",
-            root_cause="Process completed with exit code 0." if exit_code == 0 else f"Process exited with code {exit_code}.",
-            suggested_fix="Review the raw log lines for technical indicators or extract security findings to your report.",
+            analysis=f"{status_text}\nOutput contains {len(clean_text.splitlines())} lines.",
+            root_cause="Standard process stream output.",
+            suggested_fix="Inspect stdout above or use command generator to formulate next testing phase.",
             severity="INFO",
+            provider_used="builtin_offline",
         )
 
     # -----------------------------------------------------------------------
-    # 2. Natural Language to Pentest Command Generator
+    # Natural Language to Pentest Command Generation
     # -----------------------------------------------------------------------
 
     def generate_command(
@@ -229,6 +485,7 @@ class AICopilotEngine:
                     is_active=True,
                     is_in_scope=is_in_scope,
                     scope_reason=scope_reason,
+                    provider_used=self.provider.value,
                 )
             if "all" in p_low or "full" in p_low:
                 return AICommandSuggestion(
@@ -238,6 +495,7 @@ class AICopilotEngine:
                     is_active=True,
                     is_in_scope=is_in_scope,
                     scope_reason=scope_reason,
+                    provider_used=self.provider.value,
                 )
             return AICommandSuggestion(
                 tool_name="nmap",
@@ -246,6 +504,7 @@ class AICopilotEngine:
                 is_active=True,
                 is_in_scope=is_in_scope,
                 scope_reason=scope_reason,
+                provider_used=self.provider.value,
             )
 
         # 2. Gobuster Web Directory Enumeration
@@ -258,6 +517,7 @@ class AICopilotEngine:
                 is_active=True,
                 is_in_scope=is_in_scope,
                 scope_reason=scope_reason,
+                provider_used=self.provider.value,
             )
 
         # 3. WAF Detection
@@ -270,6 +530,7 @@ class AICopilotEngine:
                 is_active=True,
                 is_in_scope=is_in_scope,
                 scope_reason=scope_reason,
+                provider_used=self.provider.value,
             )
 
         # 4. SQL Injection with SQLMap
@@ -278,24 +539,26 @@ class AICopilotEngine:
             return AICommandSuggestion(
                 tool_name="sqlmap",
                 command=f"python3 source/web/sqlmap/sqlmap.py -u \"{url}\" --batch --risk=1 --level=1",
-                explanation="Automated baseline SQL injection vulnerability testing.",
+                explanation="Automated SQL injection audit testing GET/POST parameter vulnerabilities.",
                 is_active=True,
                 is_in_scope=is_in_scope,
                 scope_reason=scope_reason,
+                provider_used=self.provider.value,
             )
 
-        # 5. Volatility Memory Forensics
-        if "volatility" in p_low or "memory" in p_low or "dump" in p_low or "forensic" in p_low:
+        # 5. Bandit Python SAST
+        if "bandit" in p_low or "sast" in p_low or "source code" in p_low or "python security" in p_low:
             return AICommandSuggestion(
-                tool_name="volatility3",
-                command=f"python3 source/system/volatility3/vol.py -f {cmd_target} windows.info",
-                explanation="Inspect OS and kernel details from memory dump.",
+                tool_name="bandit",
+                command="bandit -r . -f txt",
+                explanation="Static Application Security Testing (SAST) of Python source files.",
                 is_active=False,
                 is_in_scope=True,
-                scope_reason="Local forensics analysis.",
+                scope_reason="Local source code audit (In-Scope).",
+                provider_used=self.provider.value,
             )
 
-        # Default Fallback Command
+        # Default fallback
         return AICommandSuggestion(
             tool_name="nmap",
             command=f"nmap -sV {host_to_check}",
@@ -303,10 +566,11 @@ class AICopilotEngine:
             is_active=True,
             is_in_scope=is_in_scope,
             scope_reason=scope_reason,
+            provider_used=self.provider.value,
         )
 
     # -----------------------------------------------------------------------
-    # 3. Automatic Security Finding Extraction from Terminal Output
+    # Finding Extraction from Terminal Output
     # -----------------------------------------------------------------------
 
     def extract_findings_from_terminal(
@@ -317,8 +581,6 @@ class AICopilotEngine:
         clean_text = re.sub(r"\x1b\[[0-9;]*m", "", output)
 
         # A. Parse Nmap Open Ports & Services
-        # Example: "21/tcp  open  ftp     vsftpd 2.0.8"
-        #          "445/tcp open  netbios-ssn Samba smbd 3.X - 4.X"
         for line in clean_text.splitlines():
             line_str = line.strip()
             port_match = re.search(r"^(\d+/(?:tcp|udp))\s+open\s+([^\s]+)(?:\s+(.*))?", line_str)
@@ -329,8 +591,7 @@ class AICopilotEngine:
 
                 port_num = int(port_proto.split("/")[0])
 
-                # Severity heuristics for sensitive services
-                if port_num in (21, 23):  # FTP, Telnet (Unencrypted)
+                if port_num in (21, 23):  # FTP, Telnet
                     sev = FindingSeverity.HIGH
                     title = f"Unencrypted Service Exposed: {service.upper()} ({port_proto})"
                     remediation = "Disable unencrypted cleartext protocols (Telnet/FTP) and transition to SSH/SFTP."
@@ -369,8 +630,7 @@ class AICopilotEngine:
                     )
                 )
 
-        # B. Parse Gobuster Sensitive Endpoints
-        # Example: "/admin (Status: 200)"
+        # B. Parse Gobuster Endpoints
         for line in clean_text.splitlines():
             ep_match = re.search(r"^(/[^\s]+)\s+\(Status:\s*(\d+)\)", line.strip())
             if ep_match:
@@ -425,26 +685,102 @@ class AICopilotEngine:
         return findings
 
     # -----------------------------------------------------------------------
-    # Helper: Query Local Ollama API (if running)
+    # Internal HTTP Client Helpers
     # -----------------------------------------------------------------------
 
-    def _query_ollama(self, prompt: str) -> Optional[str]:
-        try:
-            url = f"{self.ollama_url.rstrip('/')}/api/generate"
-            payload = json.dumps({
-                "model": self.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-            }).encode("utf-8")
+    def _query_gemini(
+        self, prompt: str, model: Optional[str] = None, api_key: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
+        key = api_key or self.get_api_key(AIProvider.GEMINI_API)
+        if not key:
+            return None, "Gemini API key is missing."
 
+        target_model = model or self.gemini_model
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={key}"
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048},
+        }).encode("utf-8")
+
+        try:
             req = urllib.request.Request(
                 url,
                 data=payload,
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=8.0) as resp:
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                return data.get("response", "").strip()
-        except Exception:
-            return None
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return parts[0].get("text", "").strip(), None
+                return None, "Gemini API returned empty response."
+        except urllib.error.HTTPError as e:
+            return None, f"Gemini API HTTP Error {e.code}: {e.reason}"
+        except Exception as e:
+            return None, f"Gemini error: {e}"
+
+    def _query_openai(
+        self, prompt: str, model: Optional[str] = None, api_key: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
+        key = api_key or self.get_api_key(AIProvider.OPENAI_API)
+        if not key:
+            return None, "OpenAI API key is missing."
+
+        target_model = model or self.openai_model
+        url = "https://api.openai.com/v1/chat/completions"
+        payload = json.dumps({
+            "model": target_model,
+            "messages": [
+                {"role": "system", "content": "You are a professional cybersecurity penetration testing copilot and CPENT instructor."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+        }).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {key}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                choices = data.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "").strip(), None
+                return None, "OpenAI returned empty response."
+        except urllib.error.HTTPError as e:
+            return None, f"OpenAI HTTP Error {e.code}: {e.reason}"
+        except Exception as e:
+            return None, f"OpenAI error: {e}"
+
+    def _query_ollama(
+        self, prompt: str, model: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
+        target_model = model or self.ollama_model
+        url = f"{self.ollama_url.rstrip('/')}/api/generate"
+        payload = json.dumps({
+            "model": target_model,
+            "prompt": prompt,
+            "stream": False,
+        }).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=12.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("response", "").strip(), None
+        except Exception as e:
+            return None, f"Ollama error: {e}"

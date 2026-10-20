@@ -60,5 +60,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Cryptographic SHA-256 hash calculation over exact saved evidence bytes and deduplication to prevent duplicate database rows.
   - Secret and credential redaction (`redact_sensitive_text`) masking CLI passwords, auth tokens, AWS credentials, and private keys for reports while preserving unaltered byte-exact raw evidence.
   - Extended HTML, Markdown, and JSON report generation in `reports/builder.py` incorporating interactive terminal audit trails.
+- **Secure AI Provider Settings & Credential Management (Phase 11)**:
+  - `CredentialManager` in `core/credential_manager.py` with multi-tiered credential management:
+    - OS Keyring support via `keyring` (GNOME Keyring / FreeDesktop Secret Service).
+    - Machine-bound encrypted local vault (`~/.config/cybersecuritysuite/.vault_credentials`) with restricted `0600` POSIX permissions and SHA-256 host/UID derived symmetric stream cipher.
+    - In-memory transient session cache and environment variable fallbacks (`GEMINI_API_KEY`, `OPENAI_API_KEY`).
+    - Key masking utility ensuring full keys are never exposed in UI or logs (`AIza••••••••4X9Z`).
+  - Native multi-tab PySide6 `AISettingsDialog` in `desktop/dialogs/ai_settings_dialog.py`:
+    - Tab 1: Google Gemini API (model selector, password-masked input with show/hide toggle, masked key display, live connection test, clear key, and quick API link).
+    - Tab 2: OpenAI API (model selector, password-masked input, live connection test, clear key).
+    - Tab 3: Local Ollama (offline local server URL, model selector, connection test verifying model presence).
+    - Tab 4: Built-in Cybersecurity Heuristic Engine (100% offline, zero data transmission).
+  - Main Window sidebar integration in `desktop/main_window.py` with `⚙️ AI & API Settings` navigation button and terminal assistant settings launcher.
+  - Live AI connection testing (`test_connection`) in `core/ai_copilot.py` with real HTTP probes and precise error mapping (HTTP 400 invalid key, 401 unauthorized, 429 quota exhaustion, timeout, connection refused).
+  - Cloud Transmission Consent Gate: mandatory explicit user confirmation checkbox before transmitting terminal data to cloud AI providers.
+  - Automatic Sensitive Secret Redaction (`redact_sensitive_text`) masking passwords, bearer tokens, and private keys prior to prompt assembly.
+  - Zero Auto-Execution Safety: AI-generated commands require explicit user review and pass Scope Guard verification.
 - **Comprehensive Test Suite**:
-  - 100 automated unit, integration, and UI tests across all modules, models, adapters, PTY lifecycle, recording, evidence integrity, reports, and AI assistant. 100% passing (100/100).
+  - 115 automated unit, integration, and UI tests across all modules, models, adapters, PTY lifecycle, recording, evidence integrity, reports, AI assistant, credential vault, and settings UI. 100% passing (115/115).

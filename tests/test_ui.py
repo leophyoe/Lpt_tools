@@ -103,3 +103,16 @@ def test_terminal_widget_operations(qtbot, test_db):
     # Test clear
     terminal.clear()
     assert terminal.text_edit.toPlainText() == ""
+
+
+def test_main_window_ai_settings_button(qtbot, test_db):
+    from unittest.mock import patch
+    window = MainWindow(db=test_db)
+    qtbot.addWidget(window)
+    window.show()
+
+    assert hasattr(window, "btn_ai_settings")
+    with patch("desktop.dialogs.ai_settings_dialog.AISettingsDialog.exec", return_value=0) as mock_exec:
+        qtbot.mouseClick(window.btn_ai_settings, Qt.MouseButton.LeftButton)
+        mock_exec.assert_called_once()
+
