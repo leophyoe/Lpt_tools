@@ -13,6 +13,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, List, Optional
 
 from storage.models import ExecutionStatus
@@ -86,6 +87,15 @@ class ProcessRunner:
         stdout_chunks: List[str] = []
         stderr_chunks: List[str] = []
 
+        # Ensure project bin and virtual environment are always on PATH for subprocesses
+        run_env = dict(env) if env is not None else dict(os.environ)
+        project_root = Path(__file__).resolve().parent.parent
+        project_bin = str(project_root / "bin")
+        venv_bin = str(project_root / ".venv" / "bin")
+        current_p = run_env.get("PATH", "")
+        if project_bin not in current_p.split(os.pathsep):
+            run_env["PATH"] = f"{project_bin}{os.pathsep}{venv_bin}{os.pathsep}{current_p}"
+
         # Use start_new_session=True so we can kill process group on cancel
         process = subprocess.Popen(
             command,
@@ -94,7 +104,7 @@ class ProcessRunner:
             text=True,
             bufsize=1,  # Line buffered
             cwd=cwd,
-            env=env,
+            env=run_env,
             start_new_session=True,
         )
 

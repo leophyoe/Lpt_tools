@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$ROOT/source/web/c0desec-pentest:${PYTHONPATH:-}"
+exec "$ROOT/.venv/bin/python" "$ROOT/source/web/c0desec-pentest/c0desec/main.py" "$@"
+
